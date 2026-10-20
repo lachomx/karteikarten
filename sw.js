@@ -1,5 +1,5 @@
 // Offline-Unterstützung: erst Netzwerk, bei fehlender Verbindung aus dem Cache.
-const CACHE = 'karteikarten-v3';
+const CACHE = 'karteikarten-v4';
 const SHELL = ['./', 'index.html', 'styles.css', 'js/app.js', 'js/store.js', 'js/scheduler.js', 'js/ui.js', 'js/importer.js', 'js/sync.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', (e) => {
@@ -15,7 +15,8 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    // no-cache: beim Server nachfragen, ob es eine neue Version gibt (statt veraltete Dateien aus dem Browser-Cache)
+    fetch(e.request, { cache: 'no-cache' })
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy));

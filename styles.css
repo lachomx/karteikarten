@@ -92,7 +92,7 @@ svg { width: 24px; height: 24px; flex: none; }
 .page-title { margin: 4px 0 2px; font-size: 30px; font-weight: 700; }
 .page-sub { margin: 0 0 16px; color: var(--text); font-size: 15px; }
 .page-sub a { color: var(--primary); }
-.section-label { margin: 28px 4px 12px; font-size: 16px; font-weight: 500; color: var(--muted); }
+.section-label { margin: 24px 4px 10px; font-size: 14px; font-weight: 500; color: var(--muted); }
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 .center { text-align: center; }
@@ -125,19 +125,19 @@ svg { width: 24px; height: 24px; flex: none; }
 .tip { display: flex; align-items: center; gap: 10px; color: var(--muted); margin-bottom: 18px; }
 .tip-badge { background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--primary); font-size: 13px; padding: 3px 7px; border-radius: 8px; }
 
-.stack { display: flex; flex-direction: column; gap: 12px; }
+.stack { display: flex; flex-direction: column; gap: 8px; }
 .row-card {
-  display: flex; align-items: center; gap: 16px;
-  background: var(--surface); border-radius: var(--radius); padding: 18px 18px 18px 20px;
+  display: flex; align-items: center; gap: 14px;
+  background: var(--surface); border-radius: 18px; padding: 12px 14px 12px 14px;
   box-shadow: var(--shadow);
 }
 .row-card:active { transform: scale(0.99); }
 .row-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.row-title { font-size: 18px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row-sub { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 15px; }
-.row-sub svg { width: 17px; height: 17px; }
+.row-title { font-size: 16px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-sub { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 13px; margin-top: 1px; }
+.row-sub svg { width: 14px; height: 14px; }
 .chev { color: var(--muted); }
-.node-icon { width: 48px; height: 48px; border-radius: 14px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.node-icon { width: 40px; height: 40px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .c-blue { background: #e1f2ff; color: #1592ff; }
 .c-green { background: #e3fbd3; color: #3fb400; }
 .c-orange { background: #fff1d6; color: #ff8a00; }
@@ -174,13 +174,13 @@ svg { width: 24px; height: 24px; flex: none; }
 .tabbar a.active { color: var(--primary); }
 
 /* ---------- Ordner-Baum ---------- */
-.tree-block { background: var(--surface); border-radius: var(--radius); padding: 18px 18px 14px 14px; margin-bottom: 14px; box-shadow: var(--shadow); }
-.tree-row { display: flex; align-items: flex-start; gap: 12px; }
-.tree-toggle, .tree-spacer { width: 32px; height: 32px; flex: none; margin-top: 2px; }
+.tree-block { background: var(--surface); border-radius: 20px; padding: 14px 16px 6px 12px; margin-bottom: 10px; box-shadow: var(--shadow); }
+.tree-row { display: flex; align-items: flex-start; gap: 10px; }
+.tree-toggle, .tree-spacer { width: 26px; height: 26px; flex: none; margin-top: 1px; }
 .tree-toggle { border-radius: 50%; background: var(--surface-2); color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
-.tree-toggle svg { width: 18px; height: 18px; }
-.tree-link { flex: 1; min-width: 0; display: flex; flex-direction: column; padding-bottom: 12px; }
-.tree-children { margin-left: 15px; padding-left: 14px; border-left: 2px solid var(--line); }
+.tree-toggle svg { width: 15px; height: 15px; }
+.tree-link { flex: 1; min-width: 0; display: flex; flex-direction: column; padding-bottom: 10px; }
+.tree-children { margin-left: 12px; padding-left: 12px; border-left: 2px solid var(--line); }
 .tree-children .tree-spacer { display: none; }
 
 /* ---------- Fortschrittsbalken ---------- */
@@ -385,7 +385,7 @@ svg { width: 24px; height: 24px; flex: none; }
 /* ---------- Status & Etiketten ---------- */
 .done-label { display: inline-flex; align-items: center; gap: 5px; color: var(--good-dark); }
 @media (prefers-color-scheme: dark) { .done-label { color: var(--good); } }
-.done-label svg { width: 17px; height: 17px; }
+.done-label svg { width: 14px; height: 14px; }
 .tag-today {
   display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 99px; vertical-align: 2px;
   background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary);
@@ -480,3 +480,9 @@ button.streak:hover { background: var(--surface-2); }
 .sync-badge.busy { background: var(--primary-soft); color: var(--primary); }
 .sync-badge.err { background: color-mix(in srgb, var(--again) 15%, transparent); color: var(--again); }
 .sync-badge.off { background: var(--surface-2); color: var(--muted); }
+
+.node-icon svg { width: 21px; height: 21px; }
+.tree-block .row-title { font-size: 15px; }
+.tree-children .row-title { font-size: 14px; }
+.tree-block .row-sub { font-size: 12px; }
+.tree-block .row-sub svg { width: 13px; height: 13px; }
