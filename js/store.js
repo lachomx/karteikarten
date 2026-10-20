@@ -1,6 +1,8 @@
 // Datenhaltung: der gesamte Zustand liegt als ein Objekt in IndexedDB.
-// Jeder Eintrag hat id + updatedAt, damit später eine Cloud-Synchronisierung andocken kann.
+// Jeder Eintrag hat id + updatedAt; sync.js gleicht darüber mit Supabase ab.
 import { newCardFields, dayKey } from './scheduler.js';
+
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 
 const DB_NAME = 'karteikarten';
 const STORE = 'state';
@@ -27,10 +29,24 @@ function emptyState() {
     nodes: {},   // Ordner und Decks: { id, type: 'folder'|'deck', name, parentId, color, createdAt, updatedAt }
     cards: {},   // { id, deckId, front, back, createdAt, updatedAt, ...Planungsfelder }
     settings: mergeSettings(),
-    log: { days: {}, newIntroduced: {} }, // days[YYYY-MM-DD] = Anzahl Wiederholungen; newIntroduced[YYYY-MM-DD][deckId] = n
+    settingsUpdatedAt: 0,
+    log: { days: {}, newIntroduced: {}, finished: {} }, // Lernprotokoll dieses Geräts, je Tag (YYYY-MM-DD)
+    remoteLog: {}, // Lernprotokolle anderer Geräte: remoteLog[deviceId][YYYY-MM-DD] = { reviews, newIntroduced, finished }
+    sync: { pushed: {}, lastPulled: null }, // Stand der Synchronisierung (nur lokal)
     lastDeckId: null,
   };
 }
+
+/** Kennung dieses Geräts/Browsers – unterscheidet die Lernprotokolle der Geräte */
+export const deviceId = (() => {
+  try {
+    let id = localStorage.getItem('deviceId');
+    if (!id) localStorage.setItem('deviceId', (id = uid()));
+    return id;
+  } catch {
+    return uid();
+  }
+})();
 
 export let S = emptyState();
 
@@ -58,6 +74,7 @@ export async function load() {
       req.onerror = () => reject(req.error);
     });
     if (data) S = { ...emptyState(), ...data, settings: mergeSettings(data.settings) };
+    S.log.finished ??= {};
     // Karten aus älteren Versionen: bereits in die Tages-Stufen gewechselte Karten gelten als aufgestiegen
     for (const c of Object.values(S.cards)) if (c.climbed === undefined) c.climbed = c.state === 'review';
   } catch (e) {
@@ -66,8 +83,15 @@ export async function load() {
   return S;
 }
 
+const listeners = new Set();
+/** Wird nach jeder lokalen Änderung aufgerufen (z. B. um die Synchronisierung anzustoßen) */
+export function onSave(fn) {
+  listeners.add(fn);
+}
+
 let saveTimer = null;
 export function save() {
+  listeners.forEach((fn) => fn());
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try {
@@ -79,17 +103,29 @@ export function save() {
   }, 150);
 }
 
+/** Backup einspielen: Synchronisierungsstand und fremde Protokolle werden nicht übernommen */
 export function replaceState(data) {
-  S = { ...emptyState(), ...data, settings: mergeSettings(data.settings) };
+  const { sync, remoteLog, ...rest } = data;
+  S = { ...emptyState(), ...rest, settings: mergeSettings(data.settings), sync: S.sync, remoteLog: S.remoteLog };
+  S.log.finished ??= {};
+  save();
+}
+
+/** Zustand fürs Backup (ohne gerätespezifische Daten) */
+export function exportState() {
+  const { sync, remoteLog, ...rest } = S;
+  return rest;
+}
+
+export function settingsChanged() {
+  S.settingsUpdatedAt = Date.now();
   save();
 }
 
 export function resetAll() {
-  S = emptyState();
+  S = { ...emptyState(), sync: S.sync }; // gelöschte Einträge werden beim nächsten Abgleich auch online gelöscht
   save();
 }
-
-const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 
 // ---------- Ordner & Decks ----------
 const COLORS = ['blue', 'green', 'orange', 'purple', 'red'];
@@ -164,12 +200,32 @@ export function deleteCard(id) {
 }
 
 // ---------- Lernprotokoll ----------
+// Eigene Zahlen + die der anderen Geräte (aus der Synchronisierung)
+function remoteSum(day, pick) {
+  let sum = 0;
+  for (const days of Object.values(S.remoteLog ?? {})) if (days[day]) sum += pick(days[day]) ?? 0;
+  return sum;
+}
+
+/** Wiederholungen an einem Tag über alle Geräte */
+export function dayCount(day) {
+  return (S.log.days[day] ?? 0) + remoteSum(day, (d) => d.reviews);
+}
+
+function allDays() {
+  const keys = new Set(Object.keys(S.log.days));
+  for (const days of Object.values(S.remoteLog ?? {})) Object.keys(days).forEach((k) => keys.add(k));
+  return [...keys];
+}
+
 export function newIntroducedToday(deckId) {
-  return S.log.newIntroduced[dayKey()]?.[deckId] ?? 0;
+  const k = dayKey();
+  return (S.log.newIntroduced[k]?.[deckId] ?? 0) + remoteSum(k, (d) => d.newIntroduced?.[deckId]);
 }
 
 export function finishedToday(deckId) {
-  return S.log.finished?.[dayKey()]?.[deckId] ?? 0;
+  const k = dayKey();
+  return (S.log.finished?.[k]?.[deckId] ?? 0) + remoteSum(k, (d) => d.finished?.[deckId]);
 }
 
 /** finished = Karte ist für heute fertig (in eine Tages-Stufe gewechselt) */
@@ -190,11 +246,11 @@ export function recordReview(card, wasNew, finished = false) {
 }
 
 export function reviewsToday() {
-  return S.log.days[dayKey()] ?? 0;
+  return dayCount(dayKey());
 }
 
 export function goalReached(key = dayKey()) {
-  return (S.log.days[key] ?? 0) >= S.settings.dailyGoal;
+  return dayCount(key) >= S.settings.dailyGoal;
 }
 
 /** Tage in Folge, an denen das Tagesziel erreicht wurde (heute zählt, sobald es erreicht ist). */
@@ -211,7 +267,7 @@ export function streak() {
 
 /** Längste Serie von Tagen mit erreichtem Tagesziel */
 export function longestStreak() {
-  const days = Object.keys(S.log.days).filter((k) => goalReached(k)).sort();
+  const days = allDays().filter((k) => goalReached(k)).sort();
   let best = 0, run = 0, prev = null;
   for (const k of days) {
     const t = new Date(k + 'T12:00:00').getTime();
@@ -224,5 +280,5 @@ export function longestStreak() {
 
 /** Anzahl Tage mit erreichtem Tagesziel */
 export function activeDays() {
-  return Object.keys(S.log.days).filter((k) => goalReached(k)).length;
+  return allDays().filter((k) => goalReached(k)).length;
 }

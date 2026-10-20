@@ -467,3 +467,16 @@ button.streak:hover { background: var(--surface-2); }
 .card-content.long ul, .card-content.long ol { display: block; padding-left: 22px; }
 .preview-row > div { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; font-size: 14px; line-height: 1.4; }
 .preview-row > div + div { color: var(--muted); }
+
+/* ---------- Synchronisierung ---------- */
+.auth-form { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 10px; }
+.auth-intro { margin: 0 0 4px; color: var(--muted); font-size: 14px; line-height: 1.45; }
+.auth-msg { margin: 0; font-size: 14px; color: var(--muted); }
+.auth-msg:empty { display: none; }
+.auth-msg.ok { color: var(--good-dark); }
+.auth-msg.err { color: var(--again); padding: 4px 0 10px; }
+.sync-badge { font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 99px; white-space: nowrap; }
+.sync-badge.ok { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good-dark); }
+.sync-badge.busy { background: var(--primary-soft); color: var(--primary); }
+.sync-badge.err { background: color-mix(in srgb, var(--again) 15%, transparent); color: var(--again); }
+.sync-badge.off { background: var(--surface-2); color: var(--muted); }

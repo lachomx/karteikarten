@@ -1,7 +1,9 @@
 import {
   S, load, save, replaceState, resetAll, createNode, renameNode, deleteNode, children, path, descendantDecks,
   cardsOf, createCard, updateCard, deleteCard, newIntroducedToday, recordReview, streak, reviewsToday, goalReached, finishedToday, longestStreak, activeDays, DEFAULT_SETTINGS,
+  dayCount, exportState, settingsChanged,
 } from './store.js';
+import { initSync, onStatus, getStatus, signIn, signUp, signOut, syncNow } from './sync.js';
 import { schedule, planOf, newCardFields, formatInterval, category, endOfDay, dayKey } from './scheduler.js';
 import { SEPARATORS, parseImport } from './importer.js';
 import { icon, esc, sanitize, plainText, isEmptyHtml, menu, prompt, confirm, toast, readImage, openSheet, TEXT_COLORS } from './ui.js';
@@ -211,7 +213,7 @@ function activitySheet() {
     let cells = '<span></span>'.repeat(offset);
     for (let d = 1; d <= days; d++) {
       const k = dayKey(new Date(y, m, d).getTime());
-      const n = S.log.days[k] ?? 0;
+      const n = dayCount(k);
       const cls = [goalReached(k) ? 'hit' : n ? 'some' : '', k === today ? 'today' : ''].join(' ').trim();
       cells += `<span class="${cls}" title="${n} ${n === 1 ? 'Karte' : 'Karten'}">${d}</span>`;
     }
@@ -852,7 +854,7 @@ document.addEventListener('keydown', (e) => {
 function viewSettings() {
   const st = S.settings;
   const cardCount = Object.keys(S.cards).length;
-  const today = S.log.days[dayKey()] ?? 0;
+  const today = reviewsToday();
   app.innerHTML = `
     <header class="topbar"><span></span><h1>Einstellungen</h1><span></span></header>
     <main class="page with-tabbar">
@@ -871,14 +873,16 @@ function viewSettings() {
         <button type="button" class="link-btn" data-defaults>Standardwerte wiederherstellen</button>
       </form>
 
+      <h3 class="section-label">Synchronisierung</h3>
+      <div data-sync></div>
+
       <h3 class="section-label">Daten</h3>
       <div class="settings">
         <button class="set-row action" data-export><span>Backup exportieren<small>Alle Decks und Karten als Datei sichern</small></span>${icon.chevron}</button>
-        <button class="set-row action" data-import><span>Backup importieren<small>Ersetzt alle aktuellen Daten</small></span>${icon.chevron}</button>
+        <button class="set-row action" data-import><span>Backup importieren<small>Ersetzt alle aktuellen Daten${getStatus().email ? ' – auch auf deinen anderen Geräten' : ''}</small></span>${icon.chevron}</button>
         <button class="set-row action danger" data-reset><span>Alle Daten löschen</span>${icon.chevron}</button>
         <input type="file" accept="application/json,.json" hidden data-file />
       </div>
-      <p class="muted small">Deine Karten werden derzeit nur in diesem Browser gespeichert. Die Synchronisierung zwischen Mac und iPhone folgt im nächsten Schritt.</p>
     </main>
     ${tabbar('settings')}`;
 
@@ -894,19 +898,19 @@ function viewSettings() {
     const steps = parseSteps(f.get('learnSteps'), DEFAULT_SETTINGS.learnSteps);
     st.learnSteps = steps.length === 3 ? steps : [...DEFAULT_SETTINGS.learnSteps];
     st.levels = parseSteps(f.get('levels'), DEFAULT_SETTINGS.levels).map(Math.round).sort((a, b) => a - b);
+    settingsChanged();
     render();
-    save();
     session = null;
     toast('Gespeichert');
   });
   app.querySelector('[data-defaults]').onclick = () => {
     S.settings = { ...DEFAULT_SETTINGS };
-    save();
+    settingsChanged();
     render();
     toast('Standardwerte wiederhergestellt');
   };
   app.querySelector('[data-export]').onclick = () => {
-    const blob = new Blob([JSON.stringify(S)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(exportState())], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `karteikarten-backup-${dayKey()}.json`;
@@ -922,7 +926,8 @@ function viewSettings() {
     try {
       const data = JSON.parse(await f.text());
       if (!data.nodes || !data.cards) throw new Error('kein Backup');
-      if (!(await confirm('Backup importieren?', 'Alle aktuellen Decks und Karten werden ersetzt.', 'Importieren'))) return;
+      const where = getStatus().email ? ' Durch die Synchronisierung gilt das auch für deine anderen Geräte.' : '';
+      if (!(await confirm('Backup importieren?', 'Alle aktuellen Decks und Karten werden ersetzt.' + where, 'Importieren'))) return;
       replaceState(data);
       session = null;
       toast('Backup importiert');
@@ -931,14 +936,96 @@ function viewSettings() {
       toast('Die Datei ist kein gültiges Backup');
     }
   };
+  renderSync();
   app.querySelector('[data-reset]').onclick = async () => {
-    if (await confirm('Alle Daten löschen?', 'Alle Ordner, Decks, Karten und der Lernfortschritt werden unwiderruflich gelöscht.')) {
+    const where = getStatus().email ? ' Durch die Synchronisierung auch auf deinen anderen Geräten.' : '';
+    if (await confirm('Alle Daten löschen?', 'Alle Ordner, Decks, Karten und der Lernfortschritt werden unwiderruflich gelöscht.' + where)) {
       resetAll();
       session = null;
       go('#/');
     }
   };
 }
+
+// ================= Synchronisierung (Einstellungen) =================
+const SYNC_STATE = {
+  idle: ['ok', 'Synchronisiert'],
+  syncing: ['busy', 'Gleiche ab …'],
+  error: ['err', 'Fehler'],
+  offline: ['off', 'Offline'],
+};
+
+function renderSync() {
+  const box = app.querySelector('[data-sync]');
+  if (!box) return;
+  const st = getStatus();
+  if (!st.email) {
+    box.innerHTML = `
+      <form class="settings auth-form" data-auth>
+        <p class="auth-intro">Melde dich auf Mac und iPhone mit demselben Konto an – dann werden Karten, Lernstand und Streak automatisch abgeglichen.</p>
+        <input class="input" type="email" name="email" placeholder="E-Mail-Adresse" autocomplete="username" required />
+        <input class="input" type="password" name="password" placeholder="Passwort (mind. 6 Zeichen)" autocomplete="current-password" minlength="6" required />
+        <div class="sheet-actions">
+          <button type="submit" class="btn primary" data-mode="in">Anmelden</button>
+          <button type="submit" class="btn ghost" data-mode="up">Konto erstellen</button>
+        </div>
+        <p class="auth-msg" role="status"></p>
+      </form>`;
+    const form = box.querySelector('form');
+    const msg = box.querySelector('.auth-msg');
+    let mode = 'in';
+    box.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => (mode = b.dataset.mode)));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = new FormData(form);
+      const email = String(f.get('email')).trim();
+      const password = String(f.get('password'));
+      msg.className = 'auth-msg';
+      msg.textContent = mode === 'up' ? 'Konto wird erstellt …' : 'Anmelden …';
+      form.querySelectorAll('button').forEach((b) => (b.disabled = true));
+      try {
+        if (mode === 'up') {
+          const r = await signUp(email, password);
+          if (r === 'confirmEmail') {
+            msg.className = 'auth-msg ok';
+            msg.textContent = 'Fast geschafft: Wir haben dir eine E-Mail geschickt. Klicke auf den Bestätigungslink und melde dich danach hier an.';
+            form.querySelectorAll('button').forEach((b) => (b.disabled = false));
+            return;
+          }
+        } else {
+          await signIn(email, password);
+        }
+        toast('Angemeldet – Synchronisierung aktiv');
+        render();
+      } catch (err) {
+        msg.className = 'auth-msg err';
+        msg.textContent = err.message;
+        form.querySelectorAll('button').forEach((b) => (b.disabled = false));
+      }
+    });
+    return;
+  }
+  const [cls, label] = SYNC_STATE[st.state] ?? SYNC_STATE.idle;
+  const last = st.lastSync ? new Date(st.lastSync).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '–';
+  box.innerHTML = `
+    <div class="settings">
+      <div class="set-row"><span>Angemeldet als<small>${esc(st.email)}</small></span><span class="sync-badge ${cls}">${label}</span></div>
+      ${st.error ? `<p class="auth-msg err">${esc(st.error)}</p>` : ''}
+      <button class="set-row action" data-syncnow><span>Jetzt synchronisieren<small>Zuletzt abgeglichen: ${last} Uhr</small></span>${icon.chevron}</button>
+      <button class="set-row action danger" data-signout><span>Abmelden<small>Deine Karten bleiben auf diesem Gerät erhalten</small></span>${icon.chevron}</button>
+    </div>`;
+  box.querySelector('[data-syncnow]').onclick = () => syncNow();
+  box.querySelector('[data-signout]').onclick = async () => {
+    if (await confirm('Abmelden?', 'Die Karten bleiben auf diesem Gerät, werden aber nicht mehr abgeglichen.', 'Abmelden')) {
+      await signOut();
+      render();
+    }
+  };
+}
+
+onStatus(() => {
+  if (location.hash.startsWith('#/settings') && !app.querySelector('[data-auth]')) renderSync();
+});
 
 // ================= Router =================
 let lastRoute = null;
@@ -965,6 +1052,10 @@ window.addEventListener('hashchange', render);
 
 await load();
 render();
+// Änderungen von anderen Geräten anzeigen – aber keine offenen Eingaben (Editor, Import) überschreiben
+initSync(() => {
+  if (!/^#\/(add|edit|import)\//.test(location.hash) && !document.querySelector('.sheet-backdrop')) render();
+});
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

@@ -1,6 +1,6 @@
 // Offline-Unterstützung: erst Netzwerk, bei fehlender Verbindung aus dem Cache.
-const CACHE = 'karteikarten-v2';
-const SHELL = ['./', 'index.html', 'styles.css', 'js/app.js', 'js/store.js', 'js/scheduler.js', 'js/ui.js', 'js/importer.js', 'manifest.webmanifest', 'icon.svg'];
+const CACHE = 'karteikarten-v3';
+const SHELL = ['./', 'index.html', 'styles.css', 'js/app.js', 'js/store.js', 'js/scheduler.js', 'js/ui.js', 'js/importer.js', 'js/sync.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
