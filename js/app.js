@@ -129,6 +129,25 @@ async function nodeMenu(id) {
   }
 }
 
+const NODE_SORTS = { created: 'Erstellt', asc: 'A–Z', desc: 'Z–A' };
+
+/** Knopf zum Sortieren von Ordnern und Decks (gilt überall, auch auf anderen Geräten) */
+const sortChip = () => `<button class="chip small-chip" data-node-sort>${icon.sort}${NODE_SORTS[S.settings.nodeSort] ?? NODE_SORTS.created}</button>`;
+
+function bindSortChip() {
+  app.querySelectorAll('[data-node-sort]').forEach((b) => (b.onclick = async () => {
+    const v = await menu([
+      { label: 'Nach Erstellung', value: 'created' },
+      { label: 'Name aufsteigend (A–Z, 1–9)', value: 'asc' },
+      { label: 'Name absteigend (Z–A, 9–1)', value: 'desc' },
+    ], 'Sortieren');
+    if (!v) return;
+    S.settings.nodeSort = v;
+    settingsChanged();
+    render();
+  }));
+}
+
 function tabbar(active) {
   return `<nav class="tabbar">
     <a href="#/" class="${active === 'home' ? 'active' : ''}">${icon.home}<span>Startseite</span></a>
@@ -196,13 +215,14 @@ function viewHome() {
     <main class="page with-tabbar">
       ${goalBar()}
       ${hero}
-      <h3 class="section-label">Meine Stapel</h3>
+      <div class="label-row"><h3 class="section-label">Meine Stapel</h3>${roots.length > 1 ? sortChip() : ''}</div>
       <div class="stack">${list}</div>
     </main>
     <button class="fab" aria-label="Hinzufügen">${icon.plus}</button>
     ${tabbar('home')}`;
 
   app.querySelectorAll('[data-new]').forEach((b) => (b.onclick = () => newNode(b.dataset.new, null)));
+  bindSortChip();
   app.querySelector('.fab').onclick = () => addMenu(null);
   app.querySelector('[data-activity]').onclick = activitySheet;
   app.querySelector('.goal').onclick = activitySheet;
@@ -287,6 +307,7 @@ function viewFolder(id) {
       <button class="icon-btn" data-menu aria-label="Menü">${icon.more}</button>
     </header>
     <main class="page">
+      ${kids.length > 1 ? `<div class="label-row end">${sortChip()}</div>` : ''}
       ${kids.length
         ? kids.map((k) => `<section class="tree-block">${treeRow(k, 0)}</section>`).join('')
         : `<div class="empty"><p>Dieser Ordner ist noch leer.</p><div class="empty-actions"><button class="btn primary" data-new="deck">Neues Deck</button><button class="btn ghost" data-new="folder">Neuer Ordner</button></div></div>`}
@@ -296,6 +317,7 @@ function viewFolder(id) {
   app.querySelector('[data-menu]').onclick = () => nodeMenu(id);
   app.querySelector('.fab').onclick = () => addMenu(id);
   app.querySelectorAll('[data-new]').forEach((b) => (b.onclick = () => newNode(b.dataset.new, id)));
+  bindSortChip();
   app.querySelectorAll('[data-toggle]').forEach((b) => (b.onclick = () => {
     const t = b.dataset.toggle;
     collapsed.has(t) ? collapsed.delete(t) : collapsed.add(t);
@@ -348,7 +370,7 @@ function viewDeck(id) {
 
       <div class="deck-head">
         <h3>Unterdecks${subs.length ? ` (${subs.length})` : ''}</h3>
-        <button class="chip" data-new-sub>${icon.plus}Unterdeck</button>
+        <span class="head-actions">${subs.length > 1 ? sortChip() : ''}<button class="chip" data-new-sub>${icon.plus}Unterdeck</button></span>
       </div>
       ${subs.length
         ? `<div class="stack sub-decks">${subs.map((n) => `<a class="row-card" href="#/deck/${n.id}">${nodeIcon(n)}<span class="row-main"><span class="row-title">${esc(n.name)}</span><span class="row-sub">${subLabel(nodeCounts(n.id))}</span></span><span class="chev">${icon.chevron}</span></a>`).join('')}</div>`
@@ -385,6 +407,7 @@ function viewDeck(id) {
 
   app.querySelector('[data-menu]').onclick = () => nodeMenu(id);
   app.querySelector('[data-new-sub]').onclick = () => newNode('deck', id);
+  bindSortChip();
   const search = app.querySelector('.search');
   if (search) search.oninput = () => {
     deckUi.search = search.value;
@@ -927,7 +950,7 @@ function viewSettings() {
     toast('Gespeichert');
   });
   app.querySelector('[data-defaults]').onclick = () => {
-    S.settings = { ...DEFAULT_SETTINGS };
+    S.settings = { ...DEFAULT_SETTINGS, nodeSort: S.settings.nodeSort };
     settingsChanged();
     render();
     toast('Standardwerte wiederhergestellt');

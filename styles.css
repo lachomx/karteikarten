@@ -211,6 +211,14 @@ svg { width: 24px; height: 24px; flex: none; }
 .deck-head { display: flex; align-items: center; justify-content: space-between; margin: 28px 4px 0; }
 .deck-head h3 { margin: 0; font-size: 22px; font-weight: 600; }
 .deck-head .chip svg { width: 16px; height: 16px; }
+.head-actions { display: flex; gap: 6px; }
+.deck-head { flex-wrap: wrap; gap: 8px; }
+.deck-head h3, .chip { white-space: nowrap; }
+.label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 24px 4px 10px; }
+.label-row.end { justify-content: flex-end; margin-top: 0; }
+.label-row .section-label { margin: 0 auto 0 0; }
+.chip.small-chip { height: 34px; padding: 0 12px; font-size: 14px; }
+.chip.small-chip svg { width: 16px; height: 16px; }
 .sub-decks { margin-top: 12px; }
 .sub-hint { margin: 8px 4px 0; }
 

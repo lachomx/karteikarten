@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS = {
   dailyGoal: 20,           // Wiederholungen pro Tag, damit der Streak zählt
   learnSteps: [1, 8, 15],  // Minuten für Schlecht · Geht so · Gut
   levels: [1, 2, 4, 7, 14, 30, 60, 120, 240, 365], // Intervall-Stufen in Tagen
+  nodeSort: 'created',     // Reihenfolge von Ordnern und Decks: created | asc | desc
 };
 
 function mergeSettings(saved = {}) {
@@ -153,10 +154,19 @@ export function deleteNode(id) {
   save();
 }
 
+// Natürliche Sortierung: „Vorlesung 2“ vor „Vorlesung 10“
+const collator = new Intl.Collator('de', { numeric: true, sensitivity: 'base' });
+
+/** Ordner stehen vor Decks; innerhalb davon gilt die gewählte Sortierung */
 export function children(parentId) {
+  const mode = S.settings.nodeSort;
+  const byOrder = (a, b) =>
+    mode === 'asc' ? collator.compare(a.name, b.name) || a.createdAt - b.createdAt
+      : mode === 'desc' ? collator.compare(b.name, a.name) || a.createdAt - b.createdAt
+        : a.createdAt - b.createdAt;
   return Object.values(S.nodes)
     .filter((n) => (n.parentId ?? null) === (parentId ?? null))
-    .sort((a, b) => (a.type === b.type ? a.createdAt - b.createdAt : a.type === 'folder' ? -1 : 1));
+    .sort((a, b) => (a.type === b.type ? byOrder(a, b) : a.type === 'folder' ? -1 : 1));
 }
 
 export function path(id) {
