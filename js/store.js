@@ -169,11 +169,12 @@ export function path(id) {
   return out;
 }
 
+/** Alle Decks unterhalb eines Knotens; ein Deck zählt selbst mit, samt seiner Unterdecks */
 export function descendantDecks(id) {
   const n = S.nodes[id];
   if (!n) return [];
-  if (n.type === 'deck') return [n];
-  return children(id).flatMap((c) => descendantDecks(c.id));
+  const below = children(id).flatMap((c) => descendantDecks(c.id));
+  return n.type === 'deck' ? [n, ...below] : below;
 }
 
 // ---------- Karten ----------

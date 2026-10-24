@@ -210,6 +210,9 @@ svg { width: 24px; height: 24px; flex: none; }
 .today-split .c-blue { background: none; }
 .deck-head { display: flex; align-items: center; justify-content: space-between; margin: 28px 4px 0; }
 .deck-head h3 { margin: 0; font-size: 22px; font-weight: 600; }
+.deck-head .chip svg { width: 16px; height: 16px; }
+.sub-decks { margin-top: 12px; }
+.sub-hint { margin: 8px 4px 0; }
 
 .chips { display: flex; gap: 8px; justify-content: space-between; margin-bottom: 14px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 16px; border-radius: 99px; background: var(--surface-2); font-size: 16px; }
@@ -386,6 +389,10 @@ svg { width: 24px; height: 24px; flex: none; }
 .done-label { display: inline-flex; align-items: center; gap: 5px; color: var(--good-dark); }
 @media (prefers-color-scheme: dark) { .done-label { color: var(--good); } }
 .done-label svg { width: 14px; height: 14px; }
+.tag-deck {
+  display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 99px; vertical-align: 2px;
+  background: var(--surface-2); color: var(--muted); font-size: 12px; font-weight: 600;
+}
 .tag-today {
   display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 99px; vertical-align: 2px;
   background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary);

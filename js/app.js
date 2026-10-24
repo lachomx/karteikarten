@@ -12,7 +12,8 @@ const app = document.getElementById('app');
 const go = (hash) => (location.hash = hash);
 
 // ================= Zählungen =================
-function deckCounts(deckId, now = Date.now()) {
+/** Zählung nur der Karten, die direkt in diesem Deck liegen (ohne Unterdecks) */
+function ownCounts(deckId, now = Date.now()) {
   const eod = endOfDay(now);
   const cat = { new: 0, learning: 0, mastered: 0 };
   let newCount = 0, learn = 0, review = 0, total = 0;
@@ -26,16 +27,23 @@ function deckCounts(deckId, now = Date.now()) {
   return { newAvail, learn, review, due: newAvail + learn + review, cat, total };
 }
 
+/** Zählung über alle Decks unterhalb eines Ordners bzw. über ein Deck samt Unterdecks */
 function nodeCounts(id) {
-  const sum = { due: 0, total: 0, cat: { new: 0, learning: 0, mastered: 0 } };
+  const sum = { newAvail: 0, learn: 0, review: 0, due: 0, total: 0, cat: { new: 0, learning: 0, mastered: 0 } };
   for (const d of descendantDecks(id)) {
-    const c = deckCounts(d.id);
-    sum.due += c.due;
-    sum.total += c.total;
+    const c = ownCounts(d.id);
+    for (const k of ['newAvail', 'learn', 'review', 'due', 'total']) sum[k] += c[k];
     for (const k in sum.cat) sum.cat[k] += c.cat[k];
   }
   return sum;
 }
+const deckCounts = nodeCounts;
+
+/** Href eines Knotens (Ordner oder Deck) bzw. der Startseite */
+const nodeHref = (id) => (S.nodes[id] ? `#/${S.nodes[id].type}/${id}` : '#/');
+
+/** Karten eines Decks samt Unterdecks */
+const cardsWithin = (deckId) => descendantDecks(deckId).flatMap((d) => cardsOf(d.id));
 
 /** Statuszeile unter Ordnern und Decks (HTML) */
 function subLabel(c) {
@@ -49,7 +57,8 @@ const nodeIcon = (n) =>
 
 // ================= Gemeinsame Aktionen =================
 async function newNode(type, parentId) {
-  const name = await prompt(type === 'folder' ? 'Neuer Ordner' : 'Neues Deck', '', 'Erstellen');
+  const sub = type === 'deck' && S.nodes[parentId]?.type === 'deck';
+  const name = await prompt(type === 'folder' ? 'Neuer Ordner' : sub ? 'Neues Unterdeck' : 'Neues Deck', '', 'Erstellen');
   if (!name) return;
   const n = createNode(type, name, parentId);
   go(type === 'deck' ? `#/deck/${n.id}` : `#/folder/${n.id}`);
@@ -70,11 +79,13 @@ function moveTargets(nodeId) {
     children(id).forEach((c) => mark(c.id));
   };
   mark(nodeId);
+  // Decks lassen sich auch in andere Decks verschieben (als Unterdeck), Ordner nur in Ordner
+  const isDeck = S.nodes[nodeId].type === 'deck';
   const out = [{ label: 'Startseite (oberste Ebene)', value: '__root' }];
   const walk = (parentId, depth) => {
     for (const n of children(parentId)) {
-      if (n.type !== 'folder' || forbidden.has(n.id)) continue;
-      out.push({ label: `${'  '.repeat(depth)}${n.name}`, value: n.id });
+      if (forbidden.has(n.id) || (n.type === 'deck' && !isDeck)) continue;
+      out.push({ label: `${'  '.repeat(depth)}${n.type === 'deck' ? '▸ ' : ''}${n.name}`, value: n.id });
       walk(n.id, depth + 1);
     }
   };
@@ -88,7 +99,7 @@ async function nodeMenu(id) {
   if (n.type === 'folder') {
     items.push({ label: 'Neues Deck hier', value: 'newDeck' }, { label: 'Neuer Ordner hier', value: 'newFolder' });
   }
-  if (n.type === 'deck') items.push({ label: 'Massenimport', value: 'import' });
+  if (n.type === 'deck') items.push({ label: 'Neues Unterdeck', value: 'newDeck' }, { label: 'Massenimport', value: 'import' });
   items.push({ label: 'Umbenennen', value: 'rename' }, { label: 'Verschieben', value: 'move' }, { label: 'Löschen', value: 'delete', danger: true });
   const v = await menu(items, n.name);
   if (v === 'newDeck') return newNode('deck', id);
@@ -113,7 +124,7 @@ async function nodeMenu(id) {
     if (ok) {
       const parent = n.parentId;
       deleteNode(id);
-      go(parent ? `#/folder/${parent}` : '#/');
+      go(nodeHref(parent));
     }
   }
 }
@@ -159,7 +170,7 @@ function viewHome() {
   if (deck) {
     const crumbs = path(deck.id).slice(0, -1).map((n) => esc(n.name)).join(' › ');
     const due = deckCounts(deck.id).due;
-    const done = finishedToday(deck.id);
+    const done = descendantDecks(deck.id).reduce((n, d) => n + finishedToday(d.id), 0);
     hero = `<section class="hero">
       ${crumbs ? `<div class="crumbs">${crumbs} ›</div>` : ''}
       <h2>${esc(deck.name)}</h2>
@@ -271,7 +282,7 @@ function viewFolder(id) {
   const kids = children(id);
   app.innerHTML = `
     <header class="topbar">
-      <a class="icon-btn" href="${f.parentId ? `#/folder/${f.parentId}` : '#/'}" aria-label="Zurück">${icon.back}</a>
+      <a class="icon-btn" href="${nodeHref(f.parentId)}" aria-label="Zurück">${icon.back}</a>
       <h1>${esc(f.name)}</h1>
       <button class="icon-btn" data-menu aria-label="Menü">${icon.more}</button>
     </header>
@@ -301,8 +312,9 @@ function viewDeck(id) {
   const d = S.nodes[id];
   if (!d || d.type !== 'deck') return go('#/');
   const c = deckCounts(id);
+  const subs = children(id);
   const q = deckUi.search.toLowerCase();
-  let cards = cardsOf(id).filter((card) => deckUi.filter === 'all' || category(card) === deckUi.filter);
+  let cards = cardsWithin(id).filter((card) => deckUi.filter === 'all' || category(card) === deckUi.filter);
   if (q) cards = cards.filter((card) => (plainText(card.front) + ' ' + plainText(card.back)).toLowerCase().includes(q));
   cards.sort((a, b) =>
     deckUi.sort === 'newest' ? b.createdAt - a.createdAt
@@ -313,7 +325,7 @@ function viewDeck(id) {
 
   app.innerHTML = `
     <header class="topbar">
-      <a class="icon-btn" href="${d.parentId ? `#/folder/${d.parentId}` : '#/'}" aria-label="Zurück">${icon.back}</a>
+      <a class="icon-btn" href="${nodeHref(d.parentId)}" aria-label="Zurück">${icon.back}</a>
       <h1></h1>
       <button class="icon-btn" data-menu aria-label="Menü">${icon.more}</button>
     </header>
@@ -335,6 +347,14 @@ function viewDeck(id) {
       </section>
 
       <div class="deck-head">
+        <h3>Unterdecks${subs.length ? ` (${subs.length})` : ''}</h3>
+        <button class="chip" data-new-sub>${icon.plus}Unterdeck</button>
+      </div>
+      ${subs.length
+        ? `<div class="stack sub-decks">${subs.map((n) => `<a class="row-card" href="#/deck/${n.id}">${nodeIcon(n)}<span class="row-main"><span class="row-title">${esc(n.name)}</span><span class="row-sub">${subLabel(nodeCounts(n.id))}</span></span><span class="chev">${icon.chevron}</span></a>`).join('')}</div>`
+        : '<p class="muted small sub-hint">Teile das Deck auf, z. B. in ein Unterdeck pro Vorlesung. Hier lernst du dann alle Karten zusammen.</p>'}
+
+      <div class="deck-head">
         <h3>Karten im Deck (${c.total})</h3>
       </div>
       <div class="progress big"><span class="p-mastered" style="width:${pct(c.cat.mastered)}%"></span><span class="p-learning" style="width:${pct(c.cat.learning)}%"></span></div>
@@ -354,7 +374,7 @@ function viewDeck(id) {
         ${cards.map((card) => `
           <div class="card-item" data-card="${card.id}">
             <div class="card-text">
-              <div class="card-front">${esc(plainText(card.front))}${card.state !== 'new' && card.due <= eod ? '<span class="tag-today">Heute</span>' : ''}</div>
+              <div class="card-front">${esc(plainText(card.front))}${card.state !== 'new' && card.due <= eod ? '<span class="tag-today">Heute</span>' : ''}${card.deckId !== id && S.nodes[card.deckId] ? `<span class="tag-deck">${esc(S.nodes[card.deckId].name)}</span>` : ''}</div>
               <div class="card-back">${esc(plainText(card.back))}</div>
             </div>
             <button class="icon-btn small" data-card-menu="${card.id}" aria-label="Kartenmenü">${icon.more}</button>
@@ -364,6 +384,7 @@ function viewDeck(id) {
     <a class="pill" href="#/add/${id}">Karten hinzufügen</a>`;
 
   app.querySelector('[data-menu]').onclick = () => nodeMenu(id);
+  app.querySelector('[data-new-sub]').onclick = () => newNode('deck', id);
   const search = app.querySelector('.search');
   if (search) search.oninput = () => {
     deckUi.search = search.value;
@@ -689,10 +710,12 @@ const isLearning = (c) => c.state === 'learning' || c.state === 'relearning';
 
 function startSession(deckId) {
   const eod = endOfDay();
-  const cards = cardsOf(deckId);
+  const cards = cardsWithin(deckId);
   const learn = cards.filter((c) => isLearning(c) && c.due <= eod).sort((a, b) => a.due - b.due);
   const review = cards.filter((c) => c.state === 'review' && c.due <= eod).sort((a, b) => a.due - b.due);
-  const news = cards.filter((c) => c.state === 'new').sort((a, b) => a.createdAt - b.createdAt).slice(0, deckCounts(deckId).newAvail);
+  // Neue Karten: je Deck bis zu dessen Tageslimit, in Reihenfolge der Decks (Hauptdeck, dann Unterdecks)
+  const news = descendantDecks(deckId).flatMap((d) =>
+    cardsOf(d.id).filter((c) => c.state === 'new').sort((a, b) => a.createdAt - b.createdAt).slice(0, ownCounts(d.id).newAvail));
   const ids = [...learn, ...review, ...news].map((c) => c.id);
   session = { deckId, ids, total: ids.length, done: 0, current: null, revealed: false, history: [], startedDay: dayKey() };
 }
