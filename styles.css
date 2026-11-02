@@ -529,3 +529,10 @@ button.streak:hover { background: var(--surface-2); }
 .audio-row .chip.recording svg { color: #fff; }
 .audio-row .chip[hidden] { display: none; }
 select.input.num.wide { width: 120px; text-align: left; padding: 0 10px; }
+
+/* ---------- Zielwort ---------- */
+mark {
+  background: color-mix(in srgb, var(--hard) 22%, transparent); color: inherit;
+  padding: 0 3px; border-radius: 5px; box-shadow: inset 0 -2px 0 var(--hard);
+}
+.card-content mark { font-weight: 600; }

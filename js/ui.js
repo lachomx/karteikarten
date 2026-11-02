@@ -46,6 +46,7 @@ export const icon = {
   mic: svg('<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/>'),
   stop: svg('<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>'),
   play: svg('<path d="m7 4 13 8-13 8z"/>'),
+  highlight: svg('<path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>'),
   trash: svg('<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/>'),
 };
 
@@ -56,12 +57,17 @@ export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-const ALLOWED = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL', 'BR', 'DIV', 'P', 'H3', 'UL', 'OL', 'LI', 'SUP', 'SUB', 'IMG', 'SPAN', 'FONT', 'A']);
+const ALLOWED = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL', 'BR', 'DIV', 'P', 'H3', 'UL', 'OL', 'LI', 'SUP', 'SUB', 'IMG', 'SPAN', 'FONT', 'A', 'MARK']);
 
-/** Entfernt alles außer einfacher Formatierung und eingebetteten Bildern. */
+/** Zielwort-Markierung aus der CSV: {{Wort}} → <mark>Wort</mark> (die Klammern werden nie angezeigt) */
+export function markTargets(html) {
+  return String(html ?? '').replace(/\{\{([\s\S]*?)\}\}/g, '<mark>$1</mark>');
+}
+
+/** Entfernt alles außer einfacher Formatierung und eingebetteten Bildern; {{Wort}} wird zur Markierung. */
 export function sanitize(html) {
   const tpl = document.createElement('template');
-  tpl.innerHTML = html ?? '';
+  tpl.innerHTML = markTargets(html);
   const walk = (node) => {
     for (const child of [...node.childNodes]) {
       if (child.nodeType === Node.ELEMENT_NODE) {
@@ -99,7 +105,7 @@ export function plainText(html) {
   const tpl = document.createElement('template');
   tpl.innerHTML = html ?? '';
   const imgs = tpl.content.querySelectorAll('img').length;
-  const text = (tpl.content.textContent ?? '').replace(/\s+/g, ' ').trim();
+  const text = (tpl.content.textContent ?? '').replace(/\{\{|\}\}/g, '').replace(/\s+/g, ' ').trim();
   return text || (imgs ? '🖼 Bild' : '');
 }
 

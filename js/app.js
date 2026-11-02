@@ -517,7 +517,7 @@ function viewEditor({ deckId, cardId, from }) {
         <span class="ic">${icon.swap}</span><span class="grow">Umkehrkarten<small>Legt zusätzlich eine Karte mit vertauschten Seiten an</small></span>
         <input type="checkbox" class="switch" data-reverse ${localStorage.getItem('reverse') === '1' ? 'checked' : ''} />
       </label>`}
-      <p class="hint">Tipp: <b>--&gt;</b> wird zu →, <b>=&gt;</b> zu ⇒, <b>&lt;--</b> zu ← und <b>&lt;-&gt;</b> zu ↔. Mit ⌘/Strg + Enter speichern.${card ? '' : ` Viele Karten auf einmal? <a href="#/import/${deckId}">Massenimport</a>`}</p>
+      <p class="hint">Tipp: <b>--&gt;</b> wird zu →, <b>=&gt;</b> zu ⇒, <b>&lt;--</b> zu ← und <b>&lt;-&gt;</b> zu ↔. <b>{{Wort}}</b> hebt das Zielwort hervor. Mit ⌘/Strg + Enter speichern.${card ? '' : ` Viele Karten auf einmal? <a href="#/import/${deckId}">Massenimport</a>`}</p>
     </main>
     <div class="color-pop" hidden>${TEXT_COLORS.map((c) => `<button data-color="${c}" style="background:${c}" aria-label="Farbe ${c}"></button>`).join('')}</div>
     <div class="format-bar">
@@ -527,6 +527,7 @@ function viewEditor({ deckId, cardId, from }) {
       <button data-cmd="underline" aria-label="Unterstrichen" title="Unterstrichen">${icon.underline}</button>
       <button data-cmd="strikeThrough" aria-label="Durchgestrichen" title="Durchgestrichen">${icon.strike}</button>
       <button data-cmd="color" aria-label="Textfarbe" title="Textfarbe">${icon.color}</button>
+      <button data-cmd="mark" aria-label="Zielwort markieren" title="Zielwort markieren">${icon.highlight}</button>
       <button data-cmd="heading" aria-label="Überschrift" title="Überschrift">${icon.heading}</button>
       <button data-cmd="insertUnorderedList" aria-label="Aufzählung" title="Aufzählung">${icon.list}</button>
       <button data-cmd="insertOrderedList" aria-label="Nummerierte Liste" title="Nummerierte Liste">${icon.olist}</button>
@@ -584,6 +585,19 @@ function viewEditor({ deckId, cardId, from }) {
       sel.addRange(savedRange);
     }
   };
+  // Zielwort: Auswahl in <mark> setzen bzw. eine vorhandene Markierung aufheben
+  const toggleMark = () => {
+    const sel = getSelection();
+    const existing = sel.anchorNode && (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement)?.closest('mark');
+    if (existing && lastField.contains(existing)) existing.replaceWith(...existing.childNodes);
+    else if (!savedRange || savedRange.collapsed) return toast('Markiere zuerst das Zielwort');
+    else {
+      const m = document.createElement('mark');
+      m.append(savedRange.extractContents());
+      savedRange.insertNode(m);
+    }
+    update();
+  };
   const colorPop = app.querySelector('.color-pop');
   app.querySelectorAll('[data-cmd], [data-color]').forEach((b) => b.addEventListener('mousedown', (e) => e.preventDefault())); // Fokus im Feld behalten
   app.querySelectorAll('[data-cmd]').forEach((b) => {
@@ -592,6 +606,7 @@ function viewEditor({ deckId, cardId, from }) {
       if (cmd === 'image') return fileInput.click();
       rememberSelection();
       if (cmd === 'color') return (colorPop.hidden = !colorPop.hidden);
+      if (cmd === 'mark') return toggleMark();
       if (cmd === 'link') {
         if (!savedRange || savedRange.collapsed) return toast('Markiere zuerst den Text für den Link');
         const url = await prompt('Link einfügen', 'https://', 'Einfügen');

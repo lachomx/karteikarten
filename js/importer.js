@@ -1,5 +1,5 @@
 // Massenimport: Text/CSV in Karten zerlegen.
-import { esc, sanitize } from './ui.js';
+import { esc, sanitize, markTargets } from './ui.js';
 
 export const SEPARATORS = { auto: 'Automatisch', '\t': 'Tab', ';': 'Semikolon ;', ',': 'Komma ,', ' - ': 'Bindestrich -' };
 export const STATUS_WORDS = ['neu', 'eingeschlafen', 'bekannt'];
@@ -73,7 +73,7 @@ export function restoreLineBreaks(text) {
 
 export function fieldToHtml(t, restore = false) {
   if (/<[a-z][\s\S]*>/i.test(t)) return sanitize(t);
-  return esc(restore ? restoreLineBreaks(t) : t).replace(/\n/g, '<br>');
+  return markTargets(esc(restore ? restoreLineBreaks(t) : t).replace(/\n/g, '<br>'));
 }
 
 /** „klettern #Alltag, essen“ → ['klettern', 'alltag', 'essen'] (ohne Doppelte) */
