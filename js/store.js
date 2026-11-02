@@ -35,7 +35,7 @@ function emptyState() {
     cards: {},   // { id, deckId, front, back, createdAt, updatedAt, ...Planungsfelder, suspended?, sorted?, tags?, audio? }
     settings: mergeSettings(),
     settingsUpdatedAt: 0,
-    log: { days: {}, newIntroduced: {}, finished: {} }, // Lernprotokoll dieses Geräts, je Tag (YYYY-MM-DD)
+    log: { days: {}, newIntroduced: {}, finished: {}, ratings: {} }, // Lernprotokoll dieses Geräts, je Tag (YYYY-MM-DD); ratings[Tag] = { 1: n, 2: n, 3: n, 4: n }
     remoteLog: {}, // Lernprotokolle anderer Geräte: remoteLog[deviceId][YYYY-MM-DD] = { reviews, newIntroduced, finished }
     sync: { pushed: {}, lastPulled: null }, // Stand der Synchronisierung (nur lokal)
     lastDeckId: null,
@@ -84,6 +84,7 @@ export async function load() {
     });
     if (data) S = { ...emptyState(), ...data, settings: mergeSettings(data.settings) };
     S.log.finished ??= {};
+    S.log.ratings ??= {};
     // Karten aus älteren Versionen: bereits in die Tages-Stufen gewechselte Karten gelten als aufgestiegen
     for (const c of Object.values(S.cards)) if (c.climbed === undefined) c.climbed = c.state === 'review';
     cleanupAudio().catch(() => {});
@@ -118,6 +119,7 @@ export function replaceState(data) {
   const { sync, remoteLog, ...rest } = data;
   S = { ...emptyState(), ...rest, settings: mergeSettings(data.settings), sync: S.sync, remoteLog: S.remoteLog };
   S.log.finished ??= {};
+  S.log.ratings ??= {};
   save();
 }
 
@@ -272,10 +274,22 @@ export function finishedToday(deckId) {
   return (S.log.finished?.[k]?.[deckId] ?? 0) + remoteSum(k, (d) => d.finished?.[deckId]);
 }
 
-/** finished = Karte ist für heute fertig (in eine Tages-Stufe gewechselt) */
-export function recordReview(card, wasNew, finished = false) {
+/** Bewertungen eines Tages über alle Geräte: { 1: Schlecht, 2: Geht so, 3: Gut, 4: Sehr gut } */
+export function ratingsOn(day) {
+  const out = { 1: 0, 2: 0, 3: 0, 4: 0 };
+  for (const r of [1, 2, 3, 4]) out[r] = (S.log.ratings?.[day]?.[r] ?? 0) + remoteSum(day, (d) => d.ratings?.[r]);
+  return out;
+}
+
+/** finished = Karte ist für heute fertig (in eine Tages-Stufe gewechselt); rating = 1–4 für die Statistik */
+export function recordReview(card, wasNew, finished = false, rating = null) {
   const k = dayKey();
   S.log.days[k] = (S.log.days[k] ?? 0) + 1;
+  if (rating) {
+    S.log.ratings ??= {};
+    S.log.ratings[k] ??= {};
+    S.log.ratings[k][rating] = (S.log.ratings[k][rating] ?? 0) + 1;
+  }
   if (finished) {
     S.log.finished ??= {};
     S.log.finished[k] ??= {};

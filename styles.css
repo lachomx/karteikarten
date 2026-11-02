@@ -170,7 +170,7 @@ svg { width: 24px; height: 24px; flex: none; }
   padding: 10px 0 calc(10px + var(--safe-b));
   background: var(--bg); border-top: 1px solid var(--line);
 }
-.tabbar a { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 14px; color: var(--muted); min-width: 120px; }
+.tabbar a { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 14px; color: var(--muted); flex: 1; max-width: 160px; }
 .tabbar a.active { color: var(--primary); }
 
 /* ---------- Ordner-Baum ---------- */
@@ -536,3 +536,28 @@ mark {
   padding: 0 3px; border-radius: 5px; box-shadow: inset 0 -2px 0 var(--hard);
 }
 .card-content mark { font-weight: 600; }
+
+/* ---------- Statistik ---------- */
+.stat-box { background: var(--surface); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); }
+.stat-box p { margin: 10px 0 0; }
+.stat-line { display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: space-between; font-size: 14px; color: var(--muted); margin-bottom: 12px; }
+.stat-line b { color: var(--text); font-size: 17px; }
+.bars { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; align-items: end; }
+.bar { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
+.bar b { font-size: 12px; font-weight: 600; min-height: 16px; }
+.bar-col { width: 100%; max-width: 34px; height: 96px; display: flex; align-items: flex-end; background: var(--surface-2); border-radius: 8px; overflow: hidden; }
+.bar-col span { display: block; width: 100%; background: var(--hard); border-radius: 8px 8px 0 0; min-height: 0; }
+.forecast .bar-col span { background: var(--primary); }
+.bar small { font-size: 12px; color: var(--muted); }
+.bar.today small:first-of-type { color: var(--text); font-weight: 600; }
+.bar-sub { font-size: 11px !important; color: var(--good-dark) !important; min-height: 14px; }
+@media (prefers-color-scheme: dark) { .bar-sub { color: var(--good) !important; } }
+.p-young { background: color-mix(in srgb, var(--mastered) 55%, transparent); }
+.deck-due { padding: 6px 18px; }
+.due-row { display: flex; align-items: center; gap: 10px; padding: 11px 0; font-size: 15px; }
+.due-row + .due-row { border-top: 1px solid var(--line); }
+.due-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.due-row b { min-width: 34px; text-align: right; font-size: 17px; }
+.due-split { font-size: 13px; white-space: nowrap; }
+.due-row.total { font-weight: 600; }
+.stats .legend { margin-bottom: 0; font-size: 14px; }

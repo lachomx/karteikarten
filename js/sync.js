@@ -147,6 +147,8 @@ function ownLogDay(day) {
     reviews: S.log.days[day] ?? 0,
     newIntroduced: S.log.newIntroduced[day] ?? {},
     finished: S.log.finished?.[day] ?? {},
+    // nur mitsenden, wenn vorhanden – so bleiben ältere Tage unverändert und werden nicht neu hochgeladen
+    ...(S.log.ratings?.[day] ? { ratings: S.log.ratings[day] } : {}),
   };
 }
 
@@ -212,6 +214,7 @@ function applyRow(row) {
       delete S.log.days[day];
       delete S.log.newIntroduced[day];
       delete S.log.finished?.[day];
+      delete S.log.ratings?.[day];
       delete pushed[key('log', logId(day))];
     }
     return true;

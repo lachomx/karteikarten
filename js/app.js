@@ -1,11 +1,11 @@
 import {
   S, load, save, replaceState, resetAll, createNode, renameNode, deleteNode, children, path, descendantDecks,
   cardsOf, createCard, updateCard, deleteCard, newIntroducedToday, recordReview, streak, reviewsToday, goalReached, finishedToday, longestStreak, activeDays, DEFAULT_SETTINGS,
-  dayCount, exportState, settingsChanged, isTestDb, uid, putAudio, deleteAudio,
+  dayCount, exportState, settingsChanged, isTestDb, ratingsOn, uid, putAudio, deleteAudio,
 } from './store.js';
 import { audioPrefs, ttsSupported, recordSupported, koreanVoice, koreanSide, speechText, speak, stop as stopAudio, prepareAudio, playCard, playUrl, startRecording } from './audio.js';
 import { initSync, onStatus, getStatus, signIn, signUp, signOut, syncNow } from './sync.js';
-import { schedule, planOf, newCardFields, formatInterval, category, endOfDay, dayKey, statusFields, STATUSES } from './scheduler.js';
+import { schedule, planOf, newCardFields, formatInterval, category, endOfDay, startOfDay, dayKey, statusFields, STATUSES, DAY } from './scheduler.js';
 import { SEPARATORS, parseImport } from './importer.js';
 import { icon, esc, sanitize, plainText, isEmptyHtml, menu, prompt, confirm, toast, readImage, openSheet, TEXT_COLORS } from './ui.js';
 
@@ -153,6 +153,7 @@ function bindSortChip() {
 function tabbar(active) {
   return `<nav class="tabbar">
     <a href="#/" class="${active === 'home' ? 'active' : ''}">${icon.home}<span>Startseite</span></a>
+    <a href="#/stats" class="${active === 'stats' ? 'active' : ''}">${icon.chart}<span>Statistik</span></a>
     <a href="#/settings" class="${active === 'settings' ? 'active' : ''}">${icon.gear}<span>Einstellungen</span></a>
   </nav>`;
 }
@@ -890,7 +891,7 @@ function answer(rating) {
   session.history.push({ id: card.id, before: planOf(card), ids: [...session.ids], done: session.done, log: JSON.stringify(S.log), lastDeckId: S.lastDeckId });
   const plan = schedule(card, rating, S.settings);
   updateCard(card.id, plan);
-  recordReview(card, wasNew, plan.state === 'review');
+  recordReview(card, wasNew, plan.state === 'review', rating);
   if (plan.state === 'review') {
     session.ids = session.ids.filter((i) => i !== card.id);
     session.done++;
@@ -1053,6 +1054,137 @@ document.addEventListener('keydown', (e) => {
     speakCard(session.current);
   }
 });
+
+// ================= Statistik =================
+const MATURE_DAYS = 21; // ab diesem Intervall gilt eine Karte als reif
+const WEEKDAYS = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+const pctText = (x) => (x == null ? '–' : `${Math.round(x * 100)} %`);
+
+/** Trefferquote = Anteil der Antworten, die nicht „Schlecht“ waren */
+function hitRate(days) {
+  let all = 0, hit = 0;
+  for (const k of days) {
+    const r = ratingsOn(k);
+    all += r[1] + r[2] + r[3] + r[4];
+    hit += r[2] + r[3] + r[4];
+  }
+  return all ? hit / all : null;
+}
+
+/** Tagesschlüssel der letzten n Tage (ältester zuerst) bzw. der nächsten n Tage */
+function dayKeys(n, dir = -1) {
+  const base = startOfDay() + DAY / 2; // Tagesmitte, damit Zeitumstellungen nicht stören
+  return Array.from({ length: n }, (_, i) => dayKey(base + (dir < 0 ? i - n + 1 : i) * DAY));
+}
+
+/** Säulendiagramm: items = [{ label, value, sub, today }] */
+function bars(items, cls = '') {
+  const max = Math.max(1, ...items.map((x) => x.value));
+  return `<div class="bars ${cls}">${items.map((x) => `
+    <div class="bar ${x.today ? 'today' : ''}" title="${x.value}">
+      <b>${x.value || ''}</b>
+      <span class="bar-col"><span style="height:${(x.value / max) * 100}%"></span></span>
+      <small>${x.label}</small>${x.sub != null ? `<small class="bar-sub">${x.sub}</small>` : ''}
+    </div>`).join('')}</div>`;
+}
+
+/** Alle Decks in Baum-Reihenfolge */
+function allDecksInOrder() {
+  const out = [];
+  const walk = (parentId) => children(parentId).forEach((n) => (n.type === 'deck' && out.push(n), walk(n.id)));
+  walk(null);
+  return out;
+}
+
+function viewStats() {
+  const now = Date.now();
+  const eod = endOfDay(now);
+  const active = Object.values(S.cards).filter((c) => !c.suspended);
+  const stock = { new: 0, learning: 0, young: 0, mature: 0, known: Object.keys(S.cards).length - active.length };
+  for (const c of active) {
+    if (c.state === 'new') stock.new++;
+    else if (c.state !== 'review') stock.learning++;
+    else if (c.ivl >= MATURE_DAYS) stock.mature++;
+    else stock.young++;
+  }
+  const decks = allDecksInOrder().map((d) => ({ d, c: ownCounts(d.id) })).filter((x) => x.c.total);
+  const dueToday = decks.reduce((n, x) => n + x.c.due, 0);
+  const reviewsDue = decks.reduce((n, x) => n + x.c.learn + x.c.review, 0);
+
+  // Woche: Wiederholungen und Trefferquote je Tag
+  const week = dayKeys(7);
+  const weekReviews = week.reduce((n, k) => n + dayCount(k), 0);
+  const weekActive = week.filter((k) => dayCount(k)).length;
+  const weekBars = week.map((k) => {
+    const rate = hitRate([k]);
+    return { label: WEEKDAYS[new Date(k + 'T12:00:00').getDay()], value: dayCount(k), sub: rate == null ? '' : `${Math.round(rate * 100)}%`, today: k === dayKey(now) };
+  });
+  const prevWeek = dayKeys(14).slice(0, 7);
+  const rate7 = hitRate(week);
+  const ratePrev = hitRate(prevWeek);
+
+  // Vorschau: fällige Wiederholungen der nächsten 7 Tage (Überfälliges zählt zu heute)
+  const next = dayKeys(7, 1);
+  const forecast = Object.fromEntries(next.map((k) => [k, 0]));
+  for (const c of active) {
+    if (c.state === 'new') continue;
+    const k = c.due <= eod ? next[0] : dayKey(c.due);
+    if (k in forecast) forecast[k]++;
+  }
+  const total = Object.keys(S.cards).length;
+  const seg = (n, cls) => (total ? `<span class="${cls}" style="width:${(n / total) * 100}%"></span>` : '');
+
+  app.innerHTML = `
+    <header class="topbar"><span></span><h1>Statistik</h1><span></span></header>
+    <main class="page with-tabbar stats">
+      <section class="stats-row">
+        <div><b>${dueToday}</b><small>Heute fällig</small></div>
+        <div><b>${pctText(rate7)}</b><small>Treffer 7 Tage</small></div>
+        <div><b>${stock.mature}</b><small>Reife Karten</small></div>
+      </section>
+
+      <h3 class="section-label">Letzte 7 Tage</h3>
+      <section class="stat-box">
+        <div class="stat-line">
+          <span><b>${weekReviews}</b> Wiederholungen</span>
+          <span><b>${weekActive}</b>/7 Tage gelernt</span>
+          <span><b>${Math.round(weekReviews / 7)}</b> pro Tag</span>
+        </div>
+        ${bars(weekBars)}
+        <p class="muted small">Unter den Säulen: Trefferquote (nicht „Schlecht“). ${ratePrev != null && rate7 != null ? `Vorwoche: ${pctText(ratePrev)}.` : ''}</p>
+      </section>
+
+      <h3 class="section-label">Fällig in den nächsten 7 Tagen</h3>
+      <section class="stat-box">
+        ${bars(next.map((k, i) => ({ label: i === 0 ? 'Heute' : WEEKDAYS[new Date(k + 'T12:00:00').getDay()], value: forecast[k], today: i === 0 })), 'forecast')}
+        <p class="muted small">Nur Wiederholungen, ohne neue Karten. Heute inklusive Überfälliges.</p>
+      </section>
+
+      <h3 class="section-label">Fällig heute je Deck</h3>
+      <section class="stat-box deck-due">
+        ${decks.length ? decks.map(({ d, c }) => `
+          <a class="due-row" href="#/deck/${d.id}">
+            <span class="grow">${path(d.id).map((n) => esc(n.name)).join(' › ')}</span>
+            <span class="due-split" title="Wiederholen · Neu"><span class="c-sky">${c.learn + c.review}</span> · <span class="muted">${c.newAvail} neu</span></span>
+            <b>${c.due}</b>
+          </a>`).join('') + `<div class="due-row total"><span class="grow">Gesamt</span><span class="due-split"><span class="c-sky">${reviewsDue}</span> · <span class="muted">${dueToday - reviewsDue} neu</span></span><b>${dueToday}</b></div>`
+          : '<p class="muted">Noch keine Karten.</p>'}
+      </section>
+
+      <h3 class="section-label">Kartenbestand (${total})</h3>
+      <section class="stat-box">
+        <div class="progress big">${seg(stock.mature, 'p-mastered')}${seg(stock.young, 'p-young')}${seg(stock.learning, 'p-learning')}${seg(stock.new, 'p-new')}${seg(stock.known, 'p-known')}</div>
+        <div class="legend">
+          <span><i class="dot p-mastered"></i>${stock.mature} reif (≥ ${MATURE_DAYS} Tage)</span>
+          <span><i class="dot p-young"></i>${stock.young} jung</span>
+          <span><i class="dot p-learning"></i>${stock.learning} in der Lernphase</span>
+          <span><i class="dot p-new"></i>${stock.new} neu</span>
+          ${stock.known ? `<span><i class="dot p-known"></i>${stock.known} bekannt</span>` : ''}
+        </div>
+      </section>
+    </main>
+    ${tabbar('stats')}`;
+}
 
 // ================= Einstellungen =================
 function viewSettings() {
@@ -1265,6 +1397,7 @@ function render() {
   else if (view === 'study') viewStudy(id);
   else if (view === 'import') viewImport(id);
   else if (view === 'settings') viewSettings();
+  else if (view === 'stats') viewStats();
   else viewHome();
   if (route !== lastRoute) {
     window.scrollTo(0, 0);
