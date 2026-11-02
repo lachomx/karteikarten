@@ -2,13 +2,14 @@
 // Jeder Eintrag hat id + updatedAt; sync.js gleicht darüber mit Supabase ab.
 import { newCardFields, dayKey } from './scheduler.js';
 
-const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+export const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 
 // Mit ?db=name in der Adresse eine eigene Test-Datenbank verwenden (ohne Synchronisierung)
 const TEST_DB = new URLSearchParams(location.search).get('db');
 export const isTestDb = !!TEST_DB;
 const DB_NAME = TEST_DB ? `karteikarten-${TEST_DB}` : 'karteikarten';
 const STORE = 'state';
+const AUDIO = 'audio'; // eigene Audioaufnahmen als Blob, Schlüssel = card.audio.id
 const KEY = 'main';
 
 export const DEFAULT_SETTINGS = {
@@ -56,8 +57,12 @@ export let S = emptyState();
 
 function openDb() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+    const req = indexedDB.open(DB_NAME, 2);
+    req.onupgradeneeded = () => {
+      const names = req.result.objectStoreNames;
+      if (!names.contains(STORE)) req.result.createObjectStore(STORE);
+      if (!names.contains(AUDIO)) req.result.createObjectStore(AUDIO);
+    };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
@@ -81,6 +86,7 @@ export async function load() {
     S.log.finished ??= {};
     // Karten aus älteren Versionen: bereits in die Tages-Stufen gewechselte Karten gelten als aufgestiegen
     for (const c of Object.values(S.cards)) if (c.climbed === undefined) c.climbed = c.state === 'review';
+    cleanupAudio().catch(() => {});
   } catch (e) {
     console.error('Laden fehlgeschlagen', e);
   }
@@ -151,7 +157,10 @@ export function renameNode(id, name) {
 
 export function deleteNode(id) {
   for (const c of children(id)) deleteNode(c.id);
-  for (const card of cardsOf(id)) delete S.cards[card.id];
+  for (const card of cardsOf(id)) {
+    if (card.audio) deleteAudio(card.audio.id).catch(() => {});
+    delete S.cards[card.id];
+  }
   delete S.nodes[id];
   if (S.lastDeckId === id) S.lastDeckId = null;
   save();
@@ -210,8 +219,28 @@ export function updateCard(id, patch) {
 }
 
 export function deleteCard(id) {
+  if (S.cards[id]?.audio) deleteAudio(S.cards[id].audio.id).catch(() => {});
   delete S.cards[id];
   save();
+}
+
+// ---------- Eigene Audioaufnahmen ----------
+function audioReq(mode, fn) {
+  return db().then((d) => new Promise((resolve, reject) => {
+    const req = fn(d.transaction(AUDIO, mode).objectStore(AUDIO));
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  }));
+}
+export const getAudio = (id) => audioReq('readonly', (st) => st.get(id));
+export const putAudio = (id, blob) => audioReq('readwrite', (st) => st.put(blob, id));
+export const deleteAudio = (id) => audioReq('readwrite', (st) => st.delete(id));
+
+/** Aufnahmen entfernen, die zu keiner Karte mehr gehören (gelöscht oder auf einem anderen Gerät ersetzt) */
+async function cleanupAudio() {
+  const used = new Set(Object.values(S.cards).map((c) => c.audio?.id).filter(Boolean));
+  const keys = await audioReq('readonly', (st) => st.getAllKeys());
+  for (const k of keys) if (!used.has(k)) await deleteAudio(k);
 }
 
 // ---------- Lernprotokoll ----------

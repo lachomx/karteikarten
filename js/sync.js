@@ -2,13 +2,14 @@
 // Prinzip: Jeder Ordner, jedes Deck und jede Karte ist eine Zeile in der Tabelle „items“.
 // Hochgeladen wird, was sich seit dem letzten Abgleich lokal geändert hat (Vergleich über updatedAt);
 // heruntergeladen wird, was der Server seit dem letzten Abruf neu hat. Bei Konflikten gewinnt die neuere Änderung.
-import { S, save, onSave, deviceId } from './store.js';
+import { S, save, onSave, deviceId, getAudio, putAudio } from './store.js';
 
 const SUPABASE_URL = 'https://pjearscszkvvbxipgrkm.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_KcXfeuzOgTd4HpSuHsF5EA_QgDJMV8H';
 const SUPABASE_LIB = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
 const PAGE = 1000;
 const OVERLAP_MS = 60 * 1000; // beim Abruf etwas überlappen, damit keine gleichzeitigen Änderungen verloren gehen
+const AUDIO_BUCKET = 'audio'; // Supabase Storage für eigene Aufnahmen (siehe supabase-setup.sql)
 
 let client = null;
 let user = null;
@@ -121,6 +122,7 @@ export async function syncNow() {
       const sb = await getClient();
       const changed = await pull(sb);
       await push(sb);
+      await syncAudio(sb).catch((e) => console.warn('Audio-Abgleich fehlgeschlagen', e));
       setStatus({ state: 'idle', lastSync: Date.now() });
       if (changed) remoteChanged();
     } catch (e) {
@@ -277,6 +279,56 @@ async function push(sb) {
     }
   }
   applyingRemote = true; // Speichern des Sync-Stands soll keinen neuen Abgleich auslösen
+  save();
+  applyingRemote = false;
+}
+
+// ---------- Eigene Aufnahmen (Supabase Storage) ----------
+// Die Karte enthält nur { id, type }; die Datei liegt unter <user-id>/<audio-id> im Bucket „audio“.
+// Fehlt der Bucket (SQL nicht ausgeführt), bleiben die Aufnahmen einfach auf dem Gerät.
+let audioUploadOff = false;
+const audioFailed = new Set();
+
+async function syncAudio(sb) {
+  const done = (S.sync.audio ??= {}); // audio-id → schon hoch- bzw. heruntergeladen
+  const bucket = sb.storage.from(AUDIO_BUCKET);
+  const used = new Set();
+  let changed = false;
+  for (const c of Object.values(S.cards)) {
+    const id = c.audio?.id;
+    if (!id) continue;
+    used.add(id);
+    if (done[id] || audioFailed.has(id)) continue;
+    const path = `${user.id}/${id}`;
+    const blob = await getAudio(id).catch(() => null);
+    if (blob) {
+      if (audioUploadOff) continue;
+      const { error } = await bucket.upload(path, blob, { upsert: true, contentType: blob.type || c.audio.type });
+      if (error) {
+        audioUploadOff = true; // z. B. Bucket fehlt – in dieser Sitzung nicht weiter versuchen
+        console.warn('Aufnahmen werden nicht synchronisiert:', error.message);
+        continue;
+      }
+    } else {
+      const { data, error } = await bucket.download(path);
+      if (error || !data) {
+        audioFailed.add(id);
+        continue;
+      }
+      await putAudio(id, data);
+    }
+    done[id] = true;
+    changed = true;
+  }
+  // Gelöschte oder ersetzte Aufnahmen auch online entfernen
+  const gone = Object.keys(done).filter((id) => !used.has(id));
+  if (gone.length) {
+    const { error } = await bucket.remove(gone.map((id) => `${user.id}/${id}`));
+    if (!error) gone.forEach((id) => delete done[id]);
+    changed = true;
+  }
+  if (!changed) return;
+  applyingRemote = true;
   save();
   applyingRemote = false;
 }

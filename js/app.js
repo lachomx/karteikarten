@@ -1,8 +1,9 @@
 import {
   S, load, save, replaceState, resetAll, createNode, renameNode, deleteNode, children, path, descendantDecks,
   cardsOf, createCard, updateCard, deleteCard, newIntroducedToday, recordReview, streak, reviewsToday, goalReached, finishedToday, longestStreak, activeDays, DEFAULT_SETTINGS,
-  dayCount, exportState, settingsChanged, isTestDb,
+  dayCount, exportState, settingsChanged, isTestDb, uid, putAudio, deleteAudio,
 } from './store.js';
+import { audioPrefs, ttsSupported, recordSupported, koreanVoice, koreanSide, speechText, speak, stop as stopAudio, prepareAudio, playCard, playUrl, startRecording } from './audio.js';
 import { initSync, onStatus, getStatus, signIn, signUp, signOut, syncNow } from './sync.js';
 import { schedule, planOf, newCardFields, formatInterval, category, endOfDay, dayKey, statusFields, STATUSES } from './scheduler.js';
 import { SEPARATORS, parseImport } from './importer.js';
@@ -502,6 +503,15 @@ function viewEditor({ deckId, cardId, from }) {
       <div class="field" contenteditable="true" data-field="front" data-placeholder="Hier Text eingeben"></div>
       <label class="field-label">Rückseite</label>
       <div class="field" contenteditable="true" data-field="back" data-placeholder="Hier Text eingeben"></div>
+      <label class="field-label">Audio <small>– eigene Aufnahme, wird statt der Computerstimme abgespielt</small></label>
+      <div class="audio-row">
+        ${recordSupported ? `<button type="button" class="chip" data-rec>${icon.mic}<span>Aufnehmen</span></button>` : ''}
+        <button type="button" class="chip" data-audio-file>${icon.upload}Datei</button>
+        <button type="button" class="chip" data-listen>${icon.speaker}Anhören</button>
+        <button type="button" class="chip" data-audio-del aria-label="Aufnahme entfernen" hidden>${icon.trash}</button>
+        <input type="file" accept="audio/*" hidden data-audio-input />
+      </div>
+      <p class="hint" data-audio-status></p>
       ${card ? '' : `
       <label class="toggle-row">
         <span class="ic">${icon.swap}</span><span class="grow">Umkehrkarten<small>Legt zusätzlich eine Karte mit vertauschten Seiten an</small></span>
@@ -529,7 +539,7 @@ function viewEditor({ deckId, cardId, from }) {
   const front = app.querySelector('[data-field=front]');
   const back = app.querySelector('[data-field=back]');
   const saveBtn = app.querySelector('[data-save]');
-  const fileInput = app.querySelector('input[type=file]');
+  const fileInput = app.querySelector('.format-bar input[type=file]');
   let lastField = front;
   if (card) {
     front.innerHTML = sanitize(card.front);
@@ -617,21 +627,91 @@ function viewEditor({ deckId, cardId, from }) {
     update();
   };
 
-  const doSave = () => {
+  // ----- Audio: Aufnahme oder Datei, gespeichert erst beim Speichern der Karte -----
+  let audio = card?.audio ?? null;   // { id, type } der gespeicherten Aufnahme
+  let audioBlob = null;              // neue, noch nicht gespeicherte Aufnahme
+  let audioUrl = null;
+  let recorder = null;
+  const audioStatus = app.querySelector('[data-audio-status]');
+  const recBtn = app.querySelector('[data-rec]');
+  const delBtn = app.querySelector('[data-audio-del]');
+  const audioInput = app.querySelector('[data-audio-input]');
+  const showAudio = (text) => {
+    delBtn.hidden = !(audio || audioBlob);
+    audioStatus.textContent = text ?? (audioBlob ? 'Neue Aufnahme – wird beim Speichern übernommen.' : audio ? 'Eigene Aufnahme vorhanden.' : '');
+  };
+  const setBlob = (blob) => {
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    audioBlob = blob;
+    audioUrl = blob ? URL.createObjectURL(blob) : null;
+    showAudio();
+  };
+  if (audio) prepareAudio(card);
+  showAudio();
+  recBtn?.addEventListener('click', async () => {
+    if (recorder) {
+      const blob = await recorder.stop();
+      recorder = null;
+      recBtn.classList.remove('recording');
+      recBtn.innerHTML = `${icon.mic}<span>Aufnehmen</span>`;
+      if (blob.size) setBlob(blob);
+      return;
+    }
+    try {
+      recorder = await startRecording();
+      recBtn.classList.add('recording');
+      recBtn.innerHTML = `${icon.stop}<span>Stopp</span>`;
+      showAudio('Aufnahme läuft …');
+    } catch {
+      showAudio('Kein Zugriff aufs Mikrofon – bitte im Browser erlauben.');
+    }
+  });
+  app.querySelector('[data-audio-file]').onclick = () => audioInput.click();
+  audioInput.onchange = () => {
+    const f = audioInput.files[0];
+    audioInput.value = '';
+    if (!f) return;
+    if (f.size > 5 * 1024 * 1024) return toast('Die Datei ist größer als 5 MB');
+    setBlob(f);
+  };
+  app.querySelector('[data-listen]').onclick = () => {
+    if (audioUrl) return playUrl(audioUrl);
+    const preview = { front: front.innerHTML, back: back.innerHTML, audio: audioBlob ? null : audio };
+    if (!playCard(preview)) toast(koreanSide(preview) ? 'Keine Sprachausgabe verfügbar' : 'Kein koreanischer Text zum Vorlesen');
+  };
+  delBtn.onclick = () => {
+    audio = null;
+    setBlob(null);
+  };
+
+  /** Speichert eine neue Aufnahme und liefert das audio-Feld der Karte */
+  const commitAudio = async () => {
+    if (!audioBlob) return audio;
+    const id = uid();
+    await putAudio(id, audioBlob);
+    return { id, type: audioBlob.type || 'audio/webm' };
+  };
+
+  const doSave = async () => {
     if (saveBtn.disabled) return;
+    if (recorder) recBtn.click();
     const f = sanitize(front.innerHTML);
     const b = sanitize(back.innerHTML);
     if (card) {
-      updateCard(card.id, { front: f, back: b });
+      const newAudio = await commitAudio();
+      if (card.audio && card.audio.id !== newAudio?.id) deleteAudio(card.audio.id).catch(() => {});
+      updateCard(card.id, { front: f, back: b, audio: newAudio });
       toast('Gespeichert');
       go(backHref);
       return;
     }
-    createCard(deckId, f, b);
+    createCard(deckId, f, b, { audio: await commitAudio() });
     const reverse = app.querySelector('[data-reverse]')?.checked;
-    if (reverse) createCard(deckId, b, f);
+    if (reverse) createCard(deckId, b, f, { audio: await commitAudio() }); // eigene Kopie der Aufnahme
     toast(reverse ? '2 Karten hinzugefügt' : 'Karte hinzugefügt');
     front.innerHTML = back.innerHTML = '';
+    audio = null;
+    setBlob(null);
     update();
     front.focus();
   };
@@ -772,7 +852,7 @@ function startSession(deckId) {
   const news = descendantDecks(deckId).flatMap((d) =>
     cardsOf(d.id).filter((c) => c.state === 'new' && !c.suspended).sort((a, b) => a.createdAt - b.createdAt).slice(0, ownCounts(d.id).newAvail));
   const ids = [...learn, ...review, ...news].map((c) => c.id);
-  session = { deckId, ids, total: ids.length, done: 0, current: null, revealed: false, history: [], startedDay: dayKey() };
+  session = { deckId, ids, total: ids.length, done: 0, current: null, revealed: false, history: [], startedDay: dayKey(), turn: 0, spoken: null };
 }
 
 function nextCard() {
@@ -802,6 +882,8 @@ function answer(rating) {
   }
   session.current = null;
   session.revealed = false;
+  session.turn++;
+  stopAudio();
   render();
 }
 
@@ -816,6 +898,7 @@ function undo() {
   session.done = h.done;
   session.current = S.cards[h.id];
   session.revealed = false;
+  session.turn++;
   render();
 }
 
@@ -860,9 +943,12 @@ function viewStudy(deckId) {
     { r: 3, label: 'Gut', cls: 'good' },
     { r: 4, label: 'Sehr gut', cls: 'easy' },
   ];
+  const side = koreanSide(card);
+  const canSpeak = side && (side === 'front' || session.revealed);
   app.innerHTML = `${top}
     <main class="study">
       <article class="study-card">
+        ${canSpeak ? `<button class="speak-btn" data-speak aria-label="Vorlesen" title="Vorlesen (V)">${icon.speaker}</button>` : ''}
         <div class="card-content ${isLong(card.front) ? 'long' : ''}">${sanitize(card.front)}</div>
         ${session.revealed ? `<hr /><div class="card-content ${isLong(card.back) ? 'long' : ''}">${sanitize(card.back)}</div>` : ''}
       </article>
@@ -877,7 +963,20 @@ function viewStudy(deckId) {
           </div>`}
     </footer>`;
 
-  app.querySelector('[data-exit]').addEventListener('click', () => (session = null));
+  app.querySelector('[data-exit]').addEventListener('click', () => {
+    stopAudio();
+    session = null;
+  });
+  app.querySelector('[data-speak]')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    speakCard(card);
+  });
+  // Automatisch vorlesen, sobald die koreanische Seite zu sehen ist (einmal pro Karte)
+  prepareAudio(card).then(() => {
+    if (!audioPrefs.autoSpeak || !canSpeak || session?.current !== card || session.spoken === session.turn) return;
+    session.spoken = session.turn;
+    playCard(card);
+  });
   app.querySelector('[data-reveal]')?.addEventListener('click', reveal);
   app.querySelector('.study-card').addEventListener('click', () => !session.revealed && reveal());
   app.querySelector('[data-undo]')?.addEventListener('click', undo);
@@ -906,6 +1005,16 @@ function isLong(html) {
   return plainText(html).length > 140 || /<(br|li|div|h3)\b/i.test(html ?? '');
 }
 
+let voiceHintShown = false;
+function speakCard(card) {
+  const r = playCard(card);
+  if (!r) toast('Keine Sprachausgabe verfügbar');
+  else if (r === 'tts' && !koreanVoice() && !voiceHintShown) {
+    voiceHintShown = true;
+    toast('Keine koreanische Stimme gefunden – siehe Einstellungen › Audio');
+  }
+}
+
 function reveal() {
   if (!session?.current) return;
   session.revealed = true;
@@ -925,6 +1034,8 @@ document.addEventListener('keydown', (e) => {
     answer(3);
   } else if (e.key === 'z' || e.key === 'Backspace') {
     undo();
+  } else if (e.key === 'v' && app.querySelector('[data-speak]')) {
+    speakCard(session.current);
   }
 });
 
@@ -950,6 +1061,14 @@ function viewSettings() {
         <label class="set-row"><span>Stufen in Tagen<small>„Gut“ steigt eine Stufe auf (auf der 1. Stufe erst beim zweiten Mal), „Sehr gut“ zwei</small></span><input class="input num stages" name="levels" value="${st.levels.join(' ')}" /></label>
         <button type="button" class="link-btn" data-defaults>Standardwerte wiederherstellen</button>
       </form>
+
+      <h3 class="section-label">Audio</h3>
+      <div class="settings">
+        <label class="set-row"><span>Koreanisch automatisch vorlesen<small>Nur auf diesem Gerät · sobald die koreanische Seite zu sehen ist (Taste V liest jederzeit vor)</small></span><input type="checkbox" class="switch" data-autospeak ${audioPrefs.autoSpeak ? 'checked' : ''} /></label>
+        <label class="set-row"><span>Sprechtempo<small>Nur auf diesem Gerät</small></span>
+          <select class="input num wide" data-rate>${[[0.7, 'Langsam'], [0.9, 'Normal'], [1.1, 'Schnell']].map(([v, l]) => `<option value="${v}" ${audioPrefs.rate === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <div class="set-row"><span>Koreanische Stimme<small data-voice></small></span><button type="button" class="chip small-chip" data-tts-test>${icon.speaker}Testen</button></div>
+      </div>
 
       <h3 class="section-label">Synchronisierung</h3>
       <div data-sync></div>
@@ -1015,6 +1134,19 @@ function viewSettings() {
     }
   };
   renderSync();
+  const voiceInfo = () => {
+    const v = koreanVoice();
+    const el = app.querySelector('[data-voice]');
+    if (!el) return;
+    el.textContent = !ttsSupported ? 'Dieser Browser hat keine Sprachausgabe.'
+      : v ? v.name
+        : 'Nicht gefunden. iPhone: Einstellungen › Bedienungshilfen › Gesprochene Inhalte › Stimmen › Koreanisch. Mac: Systemeinstellungen › Bedienungshilfen › Gesprochene Inhalte › Systemstimme › Stimmen verwalten.';
+  };
+  voiceInfo();
+  setTimeout(voiceInfo, 800); // Chrome liefert die Stimmen erst verzögert
+  app.querySelector('[data-autospeak]').onchange = (e) => (audioPrefs.autoSpeak = e.target.checked);
+  app.querySelector('[data-rate]').onchange = (e) => (audioPrefs.rate = Number(e.target.value));
+  app.querySelector('[data-tts-test]').onclick = () => speak('안녕하세요. 만나서 반가워요.') || toast('Keine Sprachausgabe verfügbar');
   app.querySelector('[data-reset]').onclick = async () => {
     const where = getStatus().email ? ' Durch die Synchronisierung auch auf deinen anderen Geräten.' : '';
     if (await confirm('Alle Daten löschen?', 'Alle Ordner, Decks, Karten und der Lernfortschritt werden unwiderruflich gelöscht.' + where)) {
