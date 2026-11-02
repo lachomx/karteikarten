@@ -28,11 +28,40 @@ if (ttsSupported) {
   loadVoices();
   speechSynthesis.addEventListener?.('voiceschanged', loadVoices);
 }
+// Apples Spaß- und Effektstimmen klingen für Vokabeln unpassend; Standard- und hochwertige Stimmen bevorzugen
+const NOVELTY = /eddy|flo|grandma|grandpa|reed|rocko|sandy|shelley|bad news|bells|boing|bubbles|cellos|jester|organ|trinoids|whisper|zarvox/i;
+const voiceScore = (v) =>
+  (/premium|enhanced|erweitert|siri|neural/i.test(v.name) ? 4 : 0) + (/yuna|google/i.test(v.name) ? 2 : 0) + (v.localService ? 1 : 0) - (NOVELTY.test(v.name) ? 5 : 0);
+
 /** Koreanische Stimme des Systems (Chrome lädt die Liste erst nach kurzer Zeit) */
 export function koreanVoice() {
   if (ttsSupported && !voices.length) loadVoices();
-  return voices.find((v) => /^ko[-_]KR$/i.test(v.lang) && v.localService) ?? voices.find((v) => /^ko\b/i.test(v.lang)) ?? null;
+  const ko = voices.filter((v) => /^ko([-_]|$)/i.test(v.lang));
+  return ko.sort((a, b) => voiceScore(b) - voiceScore(a))[0] ?? null;
 }
+
+// ---------- Freischalten (iPhone) ----------
+// iOS spielt Sprachausgabe erst nach einer Berührung ab und schaltet sie im Lautlos-Modus stumm.
+// Beim ersten Tippen: Audio-Sitzung auf „Wiedergabe“ stellen, ein stummes Mini-Audio abspielen
+// (schaltet die Seite auf Wiedergabe) und eine leere Ansage starten (gibt die Sprachausgabe frei).
+const SILENT_WAV = 'data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA';
+let unlocked = false;
+function unlockAudio() {
+  if (unlocked) return;
+  unlocked = true;
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = 'playback';
+  } catch {}
+  try {
+    new Audio(SILENT_WAV).play().catch(() => {});
+  } catch {}
+  if (ttsSupported && !speechSynthesis.speaking) {
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    speechSynthesis.speak(u);
+  }
+}
+if (typeof window !== 'undefined') for (const t of ['touchend', 'click', 'keydown']) window.addEventListener(t, unlockAudio, { capture: true, once: true });
 
 /** Text einer Seite ohne HTML; Zeilen (Umbrüche, Blöcke) bleiben getrennt */
 function linesOf(root) {
@@ -68,16 +97,27 @@ export function stop() {
   if (player) player.pause();
 }
 
+let current = null; // Referenz halten: Safari und Chrome verwerfen sonst laufende Ansagen
 /** Liest koreanischen Text vor. Gibt false zurück, wenn es keine Sprachausgabe gibt. */
 export function speak(text) {
   if (!ttsSupported || !text) return false;
-  stop();
+  unlockAudio();
+  if (player) player.pause();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = 'ko-KR';
   const v = koreanVoice();
   if (v) u.voice = v;
   u.rate = audioPrefs.rate;
-  speechSynthesis.speak(u);
+  u.onerror = (e) => {
+    if (!['interrupted', 'canceled'].includes(e.error)) window.dispatchEvent(new CustomEvent('tts-error', { detail: e.error }));
+  };
+  current = u;
+  // Safari verschluckt eine Ansage, die direkt nach cancel() startet: nur abbrechen, wenn nötig, dann kurz warten
+  const busy = speechSynthesis.speaking || speechSynthesis.pending;
+  if (busy) speechSynthesis.cancel();
+  speechSynthesis.resume(); // iOS bleibt sonst manchmal im Pausenzustand hängen
+  if (busy) setTimeout(() => current === u && speechSynthesis.speak(u), 120);
+  else speechSynthesis.speak(u);
   return true;
 }
 

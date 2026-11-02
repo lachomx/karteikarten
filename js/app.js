@@ -1074,6 +1074,7 @@ function isLong(html) {
 }
 
 let voiceHintShown = false;
+window.addEventListener('tts-error', (e) => toast(`Vorlesen fehlgeschlagen (${e.detail}). Ist eine koreanische Stimme installiert? Siehe Einstellungen › Audio`));
 function speakCard(card) {
   const r = playCard(card);
   if (!r) toast('Keine Sprachausgabe verfügbar');
