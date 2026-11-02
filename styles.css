@@ -596,3 +596,16 @@ mark {
 .chips .head-actions { display: flex; gap: 8px; min-width: 0; }
 .chips .chip.active svg { color: #fff; }
 .import-option .input { margin-bottom: 4px; }
+
+/* ---------- Tagesplan ---------- */
+.daily-help { color: var(--muted); font-size: 14px; margin: 12px 4px 4px; }
+.daily-hero { margin-top: 16px; }
+.daily-hero p { margin: 4px 0; }
+.daily-hero .empty-actions { justify-content: flex-start; margin-top: 12px; }
+.daily-src { gap: 12px; }
+.daily-check { display: flex; align-items: flex-start; gap: 10px; flex: 1; min-width: 0; }
+.daily-check input { margin-top: 3px; width: 18px; height: 18px; accent-color: var(--primary); flex: none; }
+.daily-check span { display: flex; flex-direction: column; min-width: 0; }
+.daily-src .input.num { width: 72px; flex: none; }
+.daily-src .input.num:disabled { opacity: .4; }
+.plan-badge { min-width: 44px; height: 36px; padding: 0 10px; border-radius: 10px; background: var(--primary-soft); color: var(--primary); font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex: none; }

@@ -7,6 +7,7 @@ import { audioPrefs, ttsSupported, recordSupported, koreanVoice, koreanSide, spe
 import { initSync, onStatus, getStatus, signIn, signUp, signOut, syncNow } from './sync.js';
 import { schedule, planOf, newCardFields, formatInterval, category, endOfDay, startOfDay, dayKey, statusFields, STATUSES, DAY } from './scheduler.js';
 import { SEPARATORS, parseImport, parseTags, fieldToHtml } from './importer.js';
+import { dailyCfg, defaultCfg, saveCfg, runDaily, rateFor, tagFor, planRatesFor, poolLeft, isPoolDeck, isLearnDeck, isPlanDeck, loadPlan, plannedOn, planNoFor } from './daily.js';
 import { icon, esc, sanitize, plainText, isEmptyHtml, menu, prompt, confirm, toast, readImage, openSheet, TEXT_COLORS } from './ui.js';
 
 const app = document.getElementById('app');
@@ -30,7 +31,9 @@ function ownCounts(deckId, tag = null, now = Date.now()) {
     if (c.state === 'new') newCount++;
     else if (c.due <= eod) c.state === 'review' ? review++ : learn++;
   }
-  const newAvail = Math.max(0, Math.min(newCount, S.settings.newPerDay - newIntroducedToday(deckId)));
+  // Tagesplan: Vorrats-Decks geben keine neuen Karten direkt aus, im Deck „Lernen“ gilt kein Tageslimit
+  const limit = isPoolDeck(deckId) ? 0 : isLearnDeck(deckId) ? Infinity : S.settings.newPerDay - newIntroducedToday(deckId);
+  const newAvail = Math.max(0, Math.min(newCount, limit));
   return { newAvail, learn, review, due: newAvail + learn + review, cat, total };
 }
 
@@ -382,7 +385,7 @@ function viewDeck(id) {
     </header>
     <main class="page with-pill">
       <h2 class="page-title">${esc(d.name)}</h2>
-      <p class="page-sub">Neue Karten pro Tag: <a href="#/settings">${S.settings.newPerDay}</a></p>
+      <p class="page-sub">${isLearnDeck(id) ? 'Neue Karten von heute, <a href="#/daily">Tagesplan</a>' : isPoolDeck(id) ? `Vorrat für den <a href="#/daily">Tagesplan</a>: ${srcToday(dailyCfg().sources.find((x) => x.deckId === id))} neue heute` : `Neue Karten pro Tag: <a href="#/settings">${S.settings.newPerDay}</a>`}</p>
 
       <section class="today">
         <div class="today-num">${c.due}</div>
@@ -1348,6 +1351,133 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'v' && app.querySelector('[data-speak]')) speakCard(S.cards[sorting.ids[sorting.index]]);
 });
 
+// ================= Tagesplan-Agent =================
+/** Neue Karten einer Quelle heute: laut Vokabelplan oder feste Anzahl */
+const srcToday = (src, day = dayKey()) => (src.plan ? plannedOn(src.plan, day) : rateFor(src, day));
+
+function viewDaily() {
+  const cfg = dailyCfg() ?? defaultCfg();
+  const today = dayKey();
+  const decks = allDecksInOrder().filter((d) => !isPlanDeck(d.id));
+  const srcOf = (id) => cfg.sources.find((s) => s.deckId === id);
+  const planText = (rates) => rates.map(([from, n], i) => (i ? `ab ${from.slice(8, 10)}.${from.slice(5, 7)}.: ${n}` : `${n}${from > today ? ` ab ${from.slice(8, 10)}.${from.slice(5, 7)}.` : ''}`)).join(', ');
+  const todayTotal = cfg.sources.reduce((n, s) => n + (S.nodes[s.deckId] ? srcToday(s, today) : 0), 0);
+  const r = cfg.lastResult;
+  const learn = S.nodes[cfg.learnDeckId];
+
+  app.innerHTML = `
+    <header class="topbar"><a class="icon-btn" href="#/settings" aria-label="Zurück">${icon.back}</a><h1>Tagesplan</h1><span class="icon-btn"></span></header>
+    <main class="page with-tabbar">
+      <div class="settings">
+        <label class="set-row"><span>Tagesplan-Agent<small>Stellt jeden Tag beim ersten Öffnen das Deck „Lernen“ zusammen</small></span><input type="checkbox" class="switch" data-enabled ${cfg.enabled ? 'checked' : ''} /></label>
+      </div>
+      <p class="daily-help">Jeden Morgen schiebt der Agent die Karten vom Vortag ins Deck <b>Wiederholen</b> und holt die neuen Karten des Tages aus deinen Vorrats-Decks ins Deck <b>Lernen</b>. Jede Karte bekommt den Tag ihres Ursprungsdecks, z. B. <span class="tag-inline">#yonsei-wortschatz</span>, damit du nach Bereich filtern kannst. Neue Karten, die du nicht geschafft hast, gehen zurück in ihr Deck und kommen am nächsten Tag zuerst dran. So staut sich nichts auf.</p>
+
+      ${cfg.enabled && learn ? `
+      <section class="hero daily-hero">
+        <h2>${esc(learn.name)}</h2>
+        <p>${cardsOf(cfg.learnDeckId).length} Karten in „Lernen“ · ${deckCounts(cfg.reviewDeckId).due} Wiederholungen fällig</p>
+        ${r ? `<p class="muted small">Letzter Lauf ${r.day.slice(8, 10)}.${r.day.slice(5, 7)}.: ${r.added} neu${r.fromPlan != null ? ` (${r.fromPlan} laut Plan, ${r.catchUp} nachgeholt)` : ''}, ${r.toReview} ins Wiederholen, ${r.back} zurück in den Vorrat${r.backlog ? ` · ${r.backlog} noch im Rückstand` : ''}${r.unmatched ? ` · ${r.unmatched} Plan-Karten nicht gefunden` : ''}</p>` : ''}
+        <div class="empty-actions"><a class="btn primary" href="#/study/${cfg.folderId}">Tagesplan lernen</a><button class="btn ghost" data-rerun>Heute neu zusammenstellen</button></div>
+      </section>` : ''}
+
+      <div class="label-row"><h3 class="section-label">Vorrats-Decks und neue Karten pro Tag</h3><span class="muted small">heute ${todayTotal}</span></div>
+      <div class="settings">
+        ${decks.length ? decks.map((d) => {
+          const src = srcOf(d.id);
+          const plan = planRatesFor(d.name);
+          const crumbs = path(d.id).slice(0, -1).map((n) => n.name).join(' › ');
+          return `<div class="set-row daily-src">
+            <label class="daily-check"><input type="checkbox" data-src="${d.id}" ${src ? 'checked' : ''} />
+              <span><b>${esc(d.name)}</b><small>${crumbs ? esc(crumbs) + ' · ' : ''}noch ${poolLeft(d.id)} neue${src ? ` · #${esc(src.tag)}` : ''}${src?.plan ? ' · nach Vokabelplan' : plan ? ` · Plan: ${planText(plan)}` : ''}</small></span></label>
+            ${src?.plan
+              ? `<span class="plan-badge" title="laut Vokabelplan heute">${plannedOn(src.plan, today)}</span>`
+              : `<input class="input num" type="number" min="0" max="500" data-rate="${d.id}" value="${src ? rateFor(src, today) : ''}" placeholder="–" ${src ? '' : 'disabled'} aria-label="Neue Karten pro Tag" />`}
+          </div>`;
+        }).join('') : '<p class="muted">Noch keine Decks vorhanden.</p>'}
+      </div>
+      <button class="link-btn" data-plan>Vokabelplan für die Decks 00–07 verwenden</button>
+      <p class="muted small">Decks 00–07 folgen dem Vokabelplan aus deiner Lernplan-App: Er legt für jeden Tag bis zur Korea-Reise fest, welche Karten neu dazukommen, auch an Feiertagen. Andere Decks liefern die eingetragene Anzahl pro Tag.</p>
+      <div class="settings">
+        <label class="set-row"><span>Höchstens neue Karten pro Tag<small>Gilt nur, wenn verpasste Tage nachgeholt werden. Der Rest kommt an den Folgetagen.</small></span><input class="input num" type="number" min="10" max="300" data-max value="${cfg.maxNew ?? 60}" /></label>
+      </div>
+    </main>
+    ${tabbar('settings')}`;
+
+  const store = () => {
+    saveCfg(cfg);
+    session = null;
+  };
+  app.querySelectorAll('[data-src]').forEach((cb) => (cb.onchange = () => {
+    const d = S.nodes[cb.dataset.src];
+    const no = planNoFor(d.name);
+    if (cb.checked) cfg.sources.push({ deckId: d.id, tag: tagFor(d.name), plan: no, rates: planRatesFor(d.name) ?? [[today, 10]] });
+    else cfg.sources = cfg.sources.filter((s) => s.deckId !== d.id);
+    store();
+    viewDaily();
+  }));
+  app.querySelectorAll('[data-rate]').forEach((inp) => (inp.onchange = () => {
+    const src = srcOf(inp.dataset.rate);
+    const n = Math.max(0, parseInt(inp.value, 10) || 0);
+    if (!src || n === rateFor(src, today)) return;
+    src.rates = [...src.rates.filter(([from]) => from < today), [today, n]];
+    store();
+    toast('Gespeichert – gilt ab heute');
+    viewDaily();
+  }));
+  app.querySelector('[data-plan]').onclick = () => {
+    let n = 0;
+    for (const s of cfg.sources) {
+      const no = planNoFor(S.nodes[s.deckId]?.name ?? '');
+      if (no) (s.plan = no), n++;
+    }
+    store();
+    toast(n ? `Vokabelplan für ${n} Decks aktiv` : 'Kein ausgewähltes Deck mit Nummer 00–07');
+    viewDaily();
+  };
+  app.querySelector('[data-max]').onchange = (e) => {
+    cfg.maxNew = Math.max(10, parseInt(e.target.value, 10) || 60);
+    store();
+    toast('Gespeichert');
+  };
+  app.querySelector('[data-enabled]').onchange = async (e) => {
+    if (!e.target.checked) {
+      cfg.enabled = false;
+      store();
+      return viewDaily();
+    }
+    if (!cfg.sources.length) {
+      e.target.checked = false;
+      return toast('Wähle zuerst mindestens ein Vorrats-Deck aus');
+    }
+    const start = await menu([
+      { label: 'Heute starten', value: 'today' },
+      { label: 'Ab morgen (heute schon gelernt)', value: 'tomorrow' },
+    ], 'Schon gelernte Karten dieser Decks kommen ins Deck „Wiederholen“.');
+    if (!start || start === -1) {
+      e.target.checked = false;
+      return;
+    }
+    cfg.enabled = true;
+    saveCfg(cfg);
+    // „Ab morgen“: heute nur aufräumen, keine neuen Karten
+    if (start === 'tomorrow') cfg.pause = [...(cfg.pause ?? []), today];
+    const res = runDaily({ force: true });
+    if (start === 'tomorrow') cfg.pause = cfg.pause.filter((d) => d !== today);
+    saveCfg(cfg);
+    session = null;
+    toast(`Tagesplan aktiv: ${res.added} neue Karten, ${res.toReview} ins Wiederholen`);
+    viewDaily();
+  };
+  app.querySelector('[data-rerun]')?.addEventListener('click', async () => {
+    if (!(await confirm('Heute neu zusammenstellen?', 'Nicht angefangene Karten gehen zurück in ihr Deck, dann werden die neuen Karten mit den aktuellen Mengen neu geholt. Schon gelernte bleiben erhalten (im Deck „Wiederholen“).', 'Neu zusammenstellen'))) return;
+    const res = runDaily({ force: true });
+    session = null;
+    toast(`${res.added} neue Karten in „Lernen“`);
+    viewDaily();
+  });
+}
+
 // ================= Schnelleingabe =================
 // Am Handy schnell einen Satz anlegen: Ziel-Deck vorausgewählt, Rückseite und Tags optional.
 const QUICK_DECK_NAME = '08 Eigene Sätze';
@@ -1449,6 +1579,11 @@ function viewSettings() {
         <button type="button" class="link-btn" data-defaults>Standardwerte wiederherstellen</button>
       </form>
 
+      <h3 class="section-label">Tagesplan</h3>
+      <div class="settings">
+        <a class="set-row action" href="#/daily"><span>Tagesplan-Agent<small>${dailyCfg()?.enabled ? `Aktiv · zuletzt ${dailyCfg().lastRun ?? '–'}` : 'Aus · stellt jeden Tag ein Deck „Lernen“ zusammen'}</small></span>${icon.chevron}</a>
+      </div>
+
       <h3 class="section-label">Audio</h3>
       <div class="settings">
         <label class="set-row"><span>Koreanisch automatisch vorlesen<small>Nur auf diesem Gerät · sobald die koreanische Seite zu sehen ist (Taste V liest jederzeit vor)</small></span><input type="checkbox" class="switch" data-autospeak ${audioPrefs.autoSpeak ? 'checked' : ''} /></label>
@@ -1488,7 +1623,7 @@ function viewSettings() {
     toast('Gespeichert');
   });
   app.querySelector('[data-defaults]').onclick = () => {
-    S.settings = { ...DEFAULT_SETTINGS, nodeSort: S.settings.nodeSort };
+    S.settings = { ...DEFAULT_SETTINGS, nodeSort: S.settings.nodeSort, daily: S.settings.daily };
     settingsChanged();
     render();
     toast('Standardwerte wiederhergestellt');
@@ -1640,6 +1775,7 @@ function render() {
   else if (view === 'stats') viewStats();
   else if (view === 'sort') viewSort(id);
   else if (view === 'quick') viewQuick();
+  else if (view === 'daily') viewDaily();
   else viewHome();
   if (route !== lastRoute) {
     window.scrollTo(0, 0);
@@ -1653,9 +1789,24 @@ window.addEventListener('hashchange', render);
 await load();
 render();
 // Änderungen von anderen Geräten anzeigen – aber keine offenen Eingaben (Editor, Import) überschreiben
-if (!isTestDb) initSync(() => {
+const planReady = loadPlan();
+const ready = isTestDb ? planReady : initSync(() => {
   if (!/^#\/(add|edit|import|quick)\b/.test(location.hash) && !document.querySelector('.sheet-backdrop')) render();
-});
+}).then(() => (getStatus().email ? syncNow() : null)).finally(() => planReady);
+
+// Tagesplan: erst nach dem ersten Abgleich, damit zwei Geräte nicht unabhängig voneinander umstellen
+function dailyTick() {
+  if (/^#\/(add|edit|import|quick|sort|study)\b/.test(location.hash)) return;
+  const res = runDaily();
+  if (res) {
+    session = null;
+    toast(`Tagesplan: ${res.added} neue Karten in „Lernen“`);
+    render();
+  }
+}
+ready.catch(() => {}).finally(dailyTick);
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && ready.finally(dailyTick));
+window.addEventListener('hashchange', () => ready.finally(dailyTick));
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
