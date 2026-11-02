@@ -1,10 +1,10 @@
 import {
   S, load, save, replaceState, resetAll, createNode, renameNode, deleteNode, children, path, descendantDecks,
   cardsOf, createCard, updateCard, deleteCard, newIntroducedToday, recordReview, streak, reviewsToday, goalReached, finishedToday, longestStreak, activeDays, DEFAULT_SETTINGS,
-  dayCount, exportState, settingsChanged,
+  dayCount, exportState, settingsChanged, isTestDb,
 } from './store.js';
 import { initSync, onStatus, getStatus, signIn, signUp, signOut, syncNow } from './sync.js';
-import { schedule, planOf, newCardFields, formatInterval, category, endOfDay, dayKey } from './scheduler.js';
+import { schedule, planOf, newCardFields, formatInterval, category, endOfDay, dayKey, statusFields, STATUSES } from './scheduler.js';
 import { SEPARATORS, parseImport } from './importer.js';
 import { icon, esc, sanitize, plainText, isEmptyHtml, menu, prompt, confirm, toast, readImage, openSheet, TEXT_COLORS } from './ui.js';
 
@@ -12,14 +12,15 @@ const app = document.getElementById('app');
 const go = (hash) => (location.hash = hash);
 
 // ================= Zählungen =================
-/** Zählung nur der Karten, die direkt in diesem Deck liegen (ohne Unterdecks) */
+/** Zählung nur der Karten, die direkt in diesem Deck liegen (ohne Unterdecks); bekannte (ausgesetzte) Karten sind nie fällig */
 function ownCounts(deckId, now = Date.now()) {
   const eod = endOfDay(now);
-  const cat = { new: 0, learning: 0, mastered: 0 };
+  const cat = { new: 0, learning: 0, mastered: 0, known: 0 };
   let newCount = 0, learn = 0, review = 0, total = 0;
   for (const c of cardsOf(deckId)) {
     total++;
     cat[category(c)]++;
+    if (c.suspended) continue;
     if (c.state === 'new') newCount++;
     else if (c.due <= eod) c.state === 'review' ? review++ : learn++;
   }
@@ -29,7 +30,7 @@ function ownCounts(deckId, now = Date.now()) {
 
 /** Zählung über alle Decks unterhalb eines Ordners bzw. über ein Deck samt Unterdecks */
 function nodeCounts(id) {
-  const sum = { newAvail: 0, learn: 0, review: 0, due: 0, total: 0, cat: { new: 0, learning: 0, mastered: 0 } };
+  const sum = { newAvail: 0, learn: 0, review: 0, due: 0, total: 0, cat: { new: 0, learning: 0, mastered: 0, known: 0 } };
   for (const d of descendantDecks(id)) {
     const c = ownCounts(d.id);
     for (const k of ['newAvail', 'learn', 'review', 'due', 'total']) sum[k] += c[k];
@@ -328,7 +329,7 @@ function viewFolder(id) {
 // ================= Deck =================
 const deckUi = { sort: 'newest', filter: 'all', search: '' };
 const SORTS = { newest: 'Neueste', oldest: 'Älteste', az: 'A–Z' };
-const FILTERS = { all: 'Alle', new: 'Nicht gelernt', learning: 'In Bearbeitung', mastered: 'Gemeistert' };
+const FILTERS = { all: 'Alle', new: 'Nicht gelernt', learning: 'In Bearbeitung', mastered: 'Gemeistert', known: 'Bekannt (ausgesetzt)' };
 
 function viewDeck(id) {
   const d = S.nodes[id];
@@ -379,11 +380,12 @@ function viewDeck(id) {
       <div class="deck-head">
         <h3>Karten im Deck (${c.total})</h3>
       </div>
-      <div class="progress big"><span class="p-mastered" style="width:${pct(c.cat.mastered)}%"></span><span class="p-learning" style="width:${pct(c.cat.learning)}%"></span></div>
+      <div class="progress big"><span class="p-mastered" style="width:${pct(c.cat.mastered)}%"></span><span class="p-learning" style="width:${pct(c.cat.learning)}%"></span><span class="p-known" style="width:${pct(c.cat.known)}%"></span></div>
       <div class="legend">
         <span><i class="dot p-mastered"></i>${c.cat.mastered} Gemeisterte</span>
         <span><i class="dot p-learning"></i>${c.cat.learning} In Bearbeitung</span>
         <span><i class="dot p-new"></i>${c.cat.new} Nicht gelernte</span>
+        ${c.cat.known ? `<span><i class="dot p-known"></i>${c.cat.known} Bekannt</span>` : ''}
       </div>
 
       <label class="search-wrap">${icon.search}<input class="input search" type="search" placeholder="Karten durchsuchen" value="${esc(deckUi.search)}" /></label>
@@ -396,7 +398,7 @@ function viewDeck(id) {
         ${cards.map((card) => `
           <div class="card-item" data-card="${card.id}">
             <div class="card-text">
-              <div class="card-front">${esc(plainText(card.front))}${card.state !== 'new' && card.due <= eod ? '<span class="tag-today">Heute</span>' : ''}${card.deckId !== id && S.nodes[card.deckId] ? `<span class="tag-deck">${esc(S.nodes[card.deckId].name)}</span>` : ''}</div>
+              <div class="card-front">${esc(plainText(card.front))}${card.suspended ? '<span class="tag-known">Bekannt</span>' : card.state !== 'new' && card.due <= eod ? '<span class="tag-today">Heute</span>' : ''}${card.deckId !== id && S.nodes[card.deckId] ? `<span class="tag-deck">${esc(S.nodes[card.deckId].name)}</span>` : ''}</div>
               <div class="card-back">${esc(plainText(card.back))}</div>
             </div>
             <button class="icon-btn small" data-card-menu="${card.id}" aria-label="Kartenmenü">${icon.more}</button>
@@ -434,14 +436,22 @@ function viewDeck(id) {
 }
 
 async function cardMenu(cardId) {
+  const known = S.cards[cardId].suspended;
   const v = await menu([
     { label: 'Bearbeiten', value: 'edit' },
+    known ? { label: 'Wieder aktivieren (abfragen)', value: 'activate' } : { label: 'Als bekannt aussetzen', value: 'suspend' },
     { label: 'Lernfortschritt zurücksetzen', value: 'reset' },
     { label: 'Löschen', value: 'delete', danger: true },
   ]);
   if (v === 'edit') go(`#/edit/${cardId}`);
+  if (v === 'activate' || v === 'suspend') {
+    updateCard(cardId, { suspended: v === 'suspend' });
+    toast(v === 'suspend' ? 'Karte ausgesetzt – wird nicht mehr abgefragt' : 'Karte wird wieder abgefragt');
+    session = null;
+    render();
+  }
   if (v === 'reset') {
-    updateCard(cardId, newCardFields());
+    updateCard(cardId, { ...newCardFields(), suspended: false });
     toast('Karte zurückgesetzt');
     render();
   }
@@ -637,7 +647,8 @@ function viewEditor({ deckId, cardId, from }) {
 }
 
 // ================= Massenimport =================
-const importUi = { text: '', sep: 'auto' };
+const importUi = { text: '', sep: 'auto', status: 'file' };
+const IMPORT_STATUS = { file: 'Aus der Datei', ...STATUSES };
 
 function viewImport(deckId) {
   const d = S.nodes[deckId];
@@ -665,6 +676,12 @@ function viewImport(deckId) {
         <span class="ic">${icon.swap}</span><span class="grow">Umkehrkarten<small>Legt zusätzlich je eine Karte mit vertauschten Seiten an</small></span>
         <input type="checkbox" class="switch" data-reverse />
       </label>
+      <div class="import-option">
+        <span>Status der Karten<small>„Aus der Datei“ nutzt die Spalte <i>status</i>, sonst Neu. Eingeschlafen: erste Wiederholung in 3–4 Tagen · Bekannt: wird nicht abgefragt</small></span>
+        <div class="chips wrap" data-statuses>
+          ${Object.entries(IMPORT_STATUS).map(([v, l]) => `<button class="chip ${importUi.status === v ? 'active' : ''}" data-status="${v}">${l}</button>`).join('')}
+        </div>
+      </div>
       <div class="import-preview"></div>
       <button class="btn primary big" data-import disabled>Importieren</button>
     </main>`;
@@ -687,6 +704,12 @@ function viewImport(deckId) {
     if (importUi.sep === 'auto') notes.push(`Trennzeichen: ${SEPARATORS[parsed.sep]}`);
     if (parsed.emptyBack) notes.push(`<span class="warn">${parsed.emptyBack} ohne Rückseite (Platzhalter eingefügt)</span>`);
     if (parsed.skipped) notes.push(`<span class="warn">${parsed.skipped} ${parsed.skipped === 1 ? 'Zeile' : 'Zeilen'} ohne Trennzeichen übersprungen</span>`);
+    const byStatus = {};
+    for (const card of parsed.cards) {
+      const st = statusOf(card);
+      byStatus[st] = (byStatus[st] ?? 0) + 1;
+    }
+    if (byStatus.eingeschlafen || byStatus.bekannt) notes.push(Object.entries(byStatus).map(([k, n]) => `${n} ${STATUSES[k].toLowerCase()}`).join(', '));
     preview.innerHTML = `
       <div class="preview-head">${parsed.cards.length} ${parsed.cards.length === 1 ? 'Karte' : 'Karten'} erkannt${notes.map((x) => ` · ${x}`).join('')}</div>
       ${parsed.cards.slice(0, 5).map(([f, b]) => `<div class="preview-row"><div>${f}</div><div>${b}</div></div>`).join('')}
@@ -698,6 +721,12 @@ function viewImport(deckId) {
     localStorage.setItem('importRestore', restore.checked ? '1' : '0');
     refresh();
   });
+  const statusOf = (card) => (importUi.status === 'file' ? card[2]?.status ?? 'neu' : importUi.status);
+  app.querySelectorAll('[data-status]').forEach((b) => (b.onclick = () => {
+    importUi.status = b.dataset.status;
+    app.querySelectorAll('[data-status]').forEach((x) => x.classList.toggle('active', x === b));
+    refresh();
+  }));
   app.querySelectorAll('[data-sep]').forEach((b) => (b.onclick = () => {
     importUi.sep = b.dataset.sep;
     app.querySelectorAll('[data-sep]').forEach((x) => x.classList.toggle('active', x === b));
@@ -715,10 +744,13 @@ function viewImport(deckId) {
   btn.onclick = () => {
     const base = Date.now();
     let i = 0;
-    for (const [front, back] of parsed.cards) {
-      createCard(deckId, front, back).createdAt = base + i++;
-      if (reverse.checked) createCard(deckId, back, front).createdAt = base + i++;
+    for (const card of parsed.cards) {
+      const [front, back] = card;
+      const extra = () => statusFields(statusOf(card), S.settings);
+      createCard(deckId, front, back, extra()).createdAt = base + i++;
+      if (reverse.checked) createCard(deckId, back, front, extra()).createdAt = base + i++;
     }
+    session = null;
     save();
     importUi.text = '';
     toast(`${i} ${i === 1 ? 'Karte' : 'Karten'} importiert`);
@@ -733,12 +765,12 @@ const isLearning = (c) => c.state === 'learning' || c.state === 'relearning';
 
 function startSession(deckId) {
   const eod = endOfDay();
-  const cards = cardsWithin(deckId);
+  const cards = cardsWithin(deckId).filter((c) => !c.suspended);
   const learn = cards.filter((c) => isLearning(c) && c.due <= eod).sort((a, b) => a.due - b.due);
   const review = cards.filter((c) => c.state === 'review' && c.due <= eod).sort((a, b) => a.due - b.due);
   // Neue Karten: je Deck bis zu dessen Tageslimit, in Reihenfolge der Decks (Hauptdeck, dann Unterdecks)
   const news = descendantDecks(deckId).flatMap((d) =>
-    cardsOf(d.id).filter((c) => c.state === 'new').sort((a, b) => a.createdAt - b.createdAt).slice(0, ownCounts(d.id).newAvail));
+    cardsOf(d.id).filter((c) => c.state === 'new' && !c.suspended).sort((a, b) => a.createdAt - b.createdAt).slice(0, ownCounts(d.id).newAvail));
   const ids = [...learn, ...review, ...news].map((c) => c.id);
   session = { deckId, ids, total: ids.length, done: 0, current: null, revealed: false, history: [], startedDay: dayKey() };
 }
@@ -1099,7 +1131,7 @@ window.addEventListener('hashchange', render);
 await load();
 render();
 // Änderungen von anderen Geräten anzeigen – aber keine offenen Eingaben (Editor, Import) überschreiben
-initSync(() => {
+if (!isTestDb) initSync(() => {
   if (!/^#\/(add|edit|import)\//.test(location.hash) && !document.querySelector('.sheet-backdrop')) render();
 });
 

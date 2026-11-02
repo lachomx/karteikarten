@@ -4,7 +4,10 @@ import { newCardFields, dayKey } from './scheduler.js';
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 
-const DB_NAME = 'karteikarten';
+// Mit ?db=name in der Adresse eine eigene Test-Datenbank verwenden (ohne Synchronisierung)
+const TEST_DB = new URLSearchParams(location.search).get('db');
+export const isTestDb = !!TEST_DB;
+const DB_NAME = TEST_DB ? `karteikarten-${TEST_DB}` : 'karteikarten';
 const STORE = 'state';
 const KEY = 'main';
 
@@ -28,7 +31,7 @@ function emptyState() {
   return {
     version: 1,
     nodes: {},   // Ordner und Decks: { id, type: 'folder'|'deck', name, parentId, color, createdAt, updatedAt }
-    cards: {},   // { id, deckId, front, back, createdAt, updatedAt, ...Planungsfelder }
+    cards: {},   // { id, deckId, front, back, createdAt, updatedAt, ...Planungsfelder, suspended?, sorted?, tags?, audio? }
     settings: mergeSettings(),
     settingsUpdatedAt: 0,
     log: { days: {}, newIntroduced: {}, finished: {} }, // Lernprotokoll dieses Geräts, je Tag (YYYY-MM-DD)
@@ -192,9 +195,10 @@ export function cardsOf(deckId) {
   return Object.values(S.cards).filter((c) => c.deckId === deckId);
 }
 
-export function createCard(deckId, front, back) {
+/** extra: z. B. Status-Felder (statusFields) oder tags */
+export function createCard(deckId, front, back, extra = {}) {
   const now = Date.now();
-  const card = { id: uid(), deckId, front, back, createdAt: now, updatedAt: now, ...newCardFields() };
+  const card = { id: uid(), deckId, front, back, createdAt: now, updatedAt: now, ...newCardFields(), ...extra };
   S.cards[card.id] = card;
   save();
   return card;

@@ -2,6 +2,7 @@
 import { esc, sanitize } from './ui.js';
 
 export const SEPARATORS = { auto: 'Automatisch', '\t': 'Tab', ';': 'Semikolon ;', ',': 'Komma ,', ' - ': 'Bindestrich -' };
+export const STATUS_WORDS = ['neu', 'eingeschlafen', 'bekannt'];
 export const EMPTY_BACK = '<i>(Rückseite war im Export leer – evtl. ein Bild)</i>';
 
 export function detectSeparator(text) {
@@ -75,8 +76,32 @@ export function fieldToHtml(t, restore = false) {
   return esc(restore ? restoreLineBreaks(t) : t).replace(/\n/g, '<br>');
 }
 
+/** „klettern #Alltag, essen“ → ['klettern', 'alltag', 'essen'] (ohne Doppelte) */
+export function parseTags(text) {
+  const tags = String(text ?? '').split(/[\s,]+/).map((t) => t.replace(/^#+/, '').toLowerCase()).filter(Boolean);
+  return [...new Set(tags)];
+}
+
+// Optionale Kopfzeile wie „Vorderseite;Rückseite;status;tags“
+const HEADER_WORD = /^(vorderseite|rückseite|front|back|status|tags?)$/i;
+
 /**
- * Liefert { sep, cards: [[frontHtml, backHtml]], skipped, emptyBack }.
+ * Optionale Spalten ab der dritten: Status (neu · eingeschlafen · bekannt) und Tags (leerzeichengetrennt).
+ * Die Reihenfolge ist egal – ein Status-Wort wird als Status erkannt, alles andere als Tags.
+ */
+function extraColumns(cells) {
+  const meta = { status: null, tags: [] };
+  for (const x of cells.slice(2)) {
+    const low = x.toLowerCase();
+    if (STATUS_WORDS.includes(low)) meta.status = low;
+    else if (x && !x.includes('<') && x.length <= 200) meta.tags.push(...parseTags(x));
+  }
+  meta.tags = [...new Set(meta.tags)];
+  return meta;
+}
+
+/**
+ * Liefert { sep, cards: [[frontHtml, backHtml, { status, tags }]], skipped, emptyBack }.
  * Zeilen ohne Trennzeichen werden übersprungen; Karten mit leerer Rückseite bekommen einen Platzhalter.
  */
 export function parseImport(text, sepChoice, { restore = false } = {}) {
@@ -86,12 +111,13 @@ export function parseImport(text, sepChoice, { restore = false } = {}) {
   for (const r of parseRows(text, sep)) {
     const cells = r.map((x) => x.trim());
     if (!cells.join('') || cells[0].startsWith('#')) continue; // Leerzeilen und Anki-Kopfzeilen
+    if (cells.every((x) => !x || HEADER_WORD.test(x)) && cells.some((x) => /^(status|tags?)$/i.test(x))) continue;
     if (cells.length < 2 || !cells[0]) {
       skipped++;
       continue;
     }
     if (!cells[1]) emptyBack++;
-    cards.push([fieldToHtml(cells[0], restore), cells[1] ? fieldToHtml(cells[1], restore) : EMPTY_BACK]);
+    cards.push([fieldToHtml(cells[0], restore), cells[1] ? fieldToHtml(cells[1], restore) : EMPTY_BACK, extraColumns(cells)]);
   }
   return { sep, cards, skipped, emptyBack };
 }

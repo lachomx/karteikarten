@@ -124,9 +124,29 @@ export function formatInterval(plan, now = Date.now()) {
 }
 
 /** Kategorie für die Deck-Übersicht: „gemeistert“ ist eine Karte, die bei der letzten Abfrage
- *  aufgestiegen ist – bis sie wieder fällig wird. */
+ *  aufgestiegen ist – bis sie wieder fällig wird. „Bekannt“ sind ausgesetzte Karten. */
 export function category(card, now = Date.now()) {
+  if (card.suspended) return 'known';
   if (card.state === 'new') return 'new';
   if (card.state === 'review' && card.climbed && card.due > now) return 'mastered';
   return 'learning';
+}
+
+// ---------- Status aus Import und Sortiermodus ----------
+export const STATUSES = { neu: 'Neu', eingeschlafen: 'Eingeschlafen', bekannt: 'Bekannt' };
+
+/**
+ * Planungsfelder für einen Status:
+ * - neu:           normaler Start als neue Karte
+ * - eingeschlafen: gilt als schon gelernt, erste Wiederholung zufällig in 3 oder 4 Tagen
+ *                  (verteilt viele Karten auf zwei Tage statt alle auf einmal)
+ * - bekannt:       ausgesetzt, wird nicht abgefragt (in der Kartenliste wieder aktivierbar)
+ */
+export function statusFields(status, s, now = Date.now()) {
+  if (status === 'bekannt') return { ...newCardFields(), suspended: true };
+  if (status === 'eingeschlafen') {
+    const ivl = Math.random() < 0.5 ? 3 : 4;
+    return { ...newCardFields(), state: 'review', ivl, level: levelFor(ivl, s.levels), due: startOfDay(now) + ivl * DAY, suspended: false };
+  }
+  return { ...newCardFields(), suspended: false };
 }
