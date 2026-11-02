@@ -44,7 +44,7 @@ export async function loadPlan() {
 export const planLoaded = () => !!plan;
 /** Laut Vokabelplan neue Karten eines Decks an einem Tag */
 export const plannedOn = (deckNo, day = dayKey()) => planToday[day]?.[deckNo] ?? 0;
-export const planNoFor = (name) => (plan ? Object.keys(plan).find((no) => name.trim().startsWith(no)) ?? null : null);
+export const planNoFor = (name) => (plan && plan[deckNo(name)] ? deckNo(name) : null);
 
 const ENT = { amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", apos: "'", nbsp: ' ' };
 /** Schlüssel einer Karte: Text der Vorderseite ohne HTML und ohne Leerraum (wie in der Lernplan-App) */
@@ -63,9 +63,11 @@ export const isPlanDeck = (id) => !!dailyCfg() && [dailyCfg().learnDeckId, daily
 
 /** „01 Yonsei-Wortschatz“ → „yonsei-wortschatz“ */
 export function tagFor(name) {
-  return name.replace(/^\s*\d+[\s._-]*/, '').trim().toLowerCase().replace(/[\s,#]+/g, '-') || 'karten';
+  return name.replace(/^\s*\d+[\s._-]*/, '').trim().toLowerCase().replace(/[\s,#:;.]+/g, '-').replace(/^-+|-+$/g, '') || 'karten';
 }
-export const planRatesFor = (name) => PLAN_RATES[name.trim().match(/^(\d{2})\b/)?.[1]] ?? null;
+/** Deck-Nummer am Namensanfang als zweistellige Zeichenkette: „01 Yonsei“ und „1. Yonsei“ → „01“ */
+const deckNo = (name) => name.trim().match(/^(\d{1,2})(?!\d)/)?.[1].padStart(2, '0') ?? null;
+export const planRatesFor = (name) => PLAN_RATES[deckNo(name)] ?? null;
 
 /** Neue Karten pro Tag für eine Quelle an einem Tag */
 export function rateFor(src, day = dayKey()) {
