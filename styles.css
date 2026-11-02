@@ -561,3 +561,19 @@ mark {
 .due-split { font-size: 13px; white-space: nowrap; }
 .due-row.total { font-weight: 600; }
 .stats .legend { margin-bottom: 0; font-size: 14px; }
+
+/* ---------- Sortiermodus ---------- */
+.sort-link {
+  display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 16px;
+  color: var(--primary); font-size: 15px;
+}
+.sort-link svg { width: 18px; height: 18px; }
+.sort-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.sort-row .rate { position: relative; height: 84px; font-size: 18px; }
+.sort-row .rate small { font-size: 13px; }
+.sort-row kbd { position: absolute; top: 6px; right: 9px; font: 600 11px/1 ui-monospace, monospace; opacity: 0.7; }
+@media (hover: none) { .sort-row kbd { display: none; } }
+.sort-back { color: var(--muted); font-size: 0.9em; }
+.sort-view .study-card { min-height: calc(100vh - 300px - var(--safe-t) - var(--safe-b)); padding-bottom: 40px; }
+.study-done .btn.ghost { margin-top: 18px; }
+@media (max-width: 380px) { .sort-row .rate { font-size: 15px; } }

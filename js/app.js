@@ -101,12 +101,13 @@ async function nodeMenu(id) {
   if (n.type === 'folder') {
     items.push({ label: 'Neues Deck hier', value: 'newDeck' }, { label: 'Neuer Ordner hier', value: 'newFolder' });
   }
-  if (n.type === 'deck') items.push({ label: 'Neues Unterdeck', value: 'newDeck' }, { label: 'Massenimport', value: 'import' });
+  if (n.type === 'deck') items.push({ label: 'Neues Unterdeck', value: 'newDeck' }, { label: 'Massenimport', value: 'import' }, { label: 'Neue Karten sortieren', value: 'sort' });
   items.push({ label: 'Umbenennen', value: 'rename' }, { label: 'Verschieben', value: 'move' }, { label: 'Löschen', value: 'delete', danger: true });
   const v = await menu(items, n.name);
   if (v === 'newDeck') return newNode('deck', id);
   if (v === 'newFolder') return newNode('folder', id);
   if (v === 'import') return go(`#/import/${id}`);
+  if (v === 'sort') return go(`#/sort/${id}`);
   if (v === 'rename') {
     const name = await prompt('Umbenennen', n.name);
     if (name) renameNode(id, name), render();
@@ -347,6 +348,7 @@ function viewDeck(id) {
         : plainText(a.front).localeCompare(plainText(b.front), 'de'));
   const pct = (n) => (c.total ? (n / c.total) * 100 : 0);
   const eod = endOfDay();
+  const unsorted = sortable(id).length;
 
   app.innerHTML = `
     <header class="topbar">
@@ -369,6 +371,7 @@ function viewDeck(id) {
         ${c.due
           ? `<a class="btn primary big" href="#/study/${id}">Karten lernen</a>`
           : `<button class="btn ghost big" disabled>${c.total ? 'Für heute erledigt 🎉' : 'Füge zuerst Karten hinzu'}</button>`}
+        ${unsorted ? `<a class="sort-link" href="#/sort/${id}">${icon.sort}${unsorted} neue ${unsorted === 1 ? 'Karte' : 'Karten'} sortieren: bekannt · eingeschlafen · neu</a>` : ''}
       </section>
 
       <div class="deck-head">
@@ -1186,6 +1189,111 @@ function viewStats() {
     ${tabbar('stats')}`;
 }
 
+// ================= Sortiermodus =================
+// Noch nie gelernte Karten schnell einordnen – wirkt wie der Status beim Import.
+let sorting = null;
+const SORT_CHOICES = [
+  { key: '1', status: 'bekannt', label: 'Bekannt', sub: 'nicht abfragen', cls: 'good' },
+  { key: '2', status: 'eingeschlafen', label: 'Eingeschlafen', sub: 'in 3–4 Tagen', cls: 'hard' },
+  { key: '3', status: 'neu', label: 'Neu', sub: 'normal lernen', cls: 'easy' },
+];
+
+/** Karten, die noch nie gelernt und noch nicht einsortiert wurden (withSorted: auch die als „Neu“ einsortierten) */
+function sortable(deckId, withSorted = false) {
+  return cardsWithin(deckId)
+    .filter((c) => c.state === 'new' && !c.reps && !c.suspended && (withSorted || !c.sorted))
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+function startSorting(deckId, withSorted = false) {
+  sorting = { deckId, ids: sortable(deckId, withSorted).map((c) => c.id), index: 0, history: [], counts: { bekannt: 0, eingeschlafen: 0, neu: 0 }, withSorted };
+}
+
+function sortAnswer(status) {
+  const card = S.cards[sorting.ids[sorting.index]];
+  if (!card) return;
+  sorting.history.push({ id: card.id, before: { ...planOf(card), suspended: !!card.suspended, sorted: !!card.sorted }, status });
+  updateCard(card.id, { ...(status === 'neu' ? {} : statusFields(status, S.settings)), sorted: true });
+  sorting.counts[status]++;
+  sorting.index++;
+  session = null; // Lernsitzung neu aufbauen, weil sich Fälligkeiten geändert haben
+  stopAudio();
+  render();
+}
+
+function sortUndo() {
+  const h = sorting?.history.pop();
+  if (!h) return;
+  updateCard(h.id, h.before);
+  sorting.counts[h.status]--;
+  sorting.index--;
+  session = null;
+  render();
+}
+
+function viewSort(deckId) {
+  const d = S.nodes[deckId];
+  if (!d) return go('#/');
+  if (sorting?.deckId !== deckId) startSorting(deckId);
+  // Karten überspringen, die inzwischen gelöscht oder woanders gelernt wurden
+  while (sorting.index < sorting.ids.length && S.cards[sorting.ids[sorting.index]]?.state !== 'new') sorting.ids.splice(sorting.index, 1);
+  const card = S.cards[sorting.ids[sorting.index]];
+  const n = sorting.ids.length;
+  const top = `
+    <header class="topbar study-top">
+      <a class="icon-btn" href="#/deck/${deckId}" data-exit aria-label="Beenden">${icon.close}</a>
+      <span class="counter"><b>${Math.min(sorting.index + 1, n)}</b>/${n}</span>
+      <button class="icon-btn" data-sort-undo aria-label="Rückgängig" title="Rückgängig (Z)" ${sorting.history.length ? '' : 'disabled'}>${icon.undo}</button>
+    </header>
+    <div class="study-progress"><span style="width:${n ? (sorting.index / n) * 100 : 100}%"></span></div>`;
+
+  if (!card) {
+    const c = sorting.counts;
+    const again = !sorting.withSorted && sortable(deckId, true).length;
+    app.innerHTML = `${top}
+      <main class="page study-done">
+        <div class="done-emoji">🗂️</div>
+        <h2>${n ? 'Alles sortiert!' : 'Nichts zu sortieren'}</h2>
+        <p class="muted">${n ? `${c.bekannt} bekannt · ${c.eingeschlafen} eingeschlafen · ${c.neu} neu` : 'In diesem Deck gibt es keine neuen Karten, die noch nicht einsortiert sind.'}</p>
+        ${again ? `<button class="btn ghost" data-again>Auch die als „Neu“ einsortierten (${again}) nochmal durchgehen</button>` : ''}
+        <a class="btn primary big" href="#/deck/${deckId}" data-exit>Zurück zum Deck</a>
+      </main>`;
+    app.querySelectorAll('[data-exit]').forEach((a) => a.addEventListener('click', () => (sorting = null)));
+    app.querySelector('[data-sort-undo]').onclick = sortUndo;
+    const b = app.querySelector('[data-again]');
+    if (b) b.onclick = () => (startSorting(deckId, true), render());
+    return;
+  }
+
+  const canSpeak = !!koreanSide(card);
+  app.innerHTML = `${top}
+    <main class="study sort-view">
+      <article class="study-card">
+        ${canSpeak ? `<button class="speak-btn" data-speak aria-label="Vorlesen" title="Vorlesen (V)">${icon.speaker}</button>` : ''}
+        <div class="card-content ${isLong(card.front) ? 'long' : ''}">${sanitize(card.front)}</div>
+        <hr />
+        <div class="card-content sort-back ${isLong(card.back) ? 'long' : ''}">${sanitize(card.back)}</div>
+      </article>
+    </main>
+    <footer class="study-actions">
+      <div class="sort-row">${SORT_CHOICES.map((x) => `<button class="rate ${x.cls}" data-choice="${x.status}">${x.label}<small>${x.sub}</small><kbd>${x.key}</kbd></button>`).join('')}</div>
+    </footer>`;
+  app.querySelector('[data-exit]').addEventListener('click', () => (sorting = null));
+  app.querySelector('[data-sort-undo]').onclick = sortUndo;
+  app.querySelectorAll('[data-choice]').forEach((b) => (b.onclick = () => sortAnswer(b.dataset.choice)));
+  app.querySelector('[data-speak]')?.addEventListener('click', () => speakCard(card));
+  prepareAudio(card);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!location.hash.startsWith('#/sort/') || !sorting) return;
+  if (document.querySelector('.sheet-backdrop') || e.metaKey || e.ctrlKey || e.altKey) return;
+  const choice = SORT_CHOICES.find((x) => x.key === e.key);
+  if (choice && sorting.index < sorting.ids.length) sortAnswer(choice.status);
+  else if (e.key === 'z' || e.key === 'Backspace') sortUndo();
+  else if (e.key === 'v' && app.querySelector('[data-speak]')) speakCard(S.cards[sorting.ids[sorting.index]]);
+});
+
 // ================= Einstellungen =================
 function viewSettings() {
   const st = S.settings;
@@ -1398,6 +1506,7 @@ function render() {
   else if (view === 'import') viewImport(id);
   else if (view === 'settings') viewSettings();
   else if (view === 'stats') viewStats();
+  else if (view === 'sort') viewSort(id);
   else viewHome();
   if (route !== lastRoute) {
     window.scrollTo(0, 0);
