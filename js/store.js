@@ -63,7 +63,11 @@ function openDb() {
       if (!names.contains(STORE)) req.result.createObjectStore(STORE);
       if (!names.contains(AUDIO)) req.result.createObjectStore(AUDIO);
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      // Andere Tabs mit neuerer Version (z. B. nach einem Update) nicht blockieren
+      req.result.onversionchange = () => req.result.close();
+      resolve(req.result);
+    };
     req.onerror = () => reject(req.error);
   });
 }
