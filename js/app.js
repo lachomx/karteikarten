@@ -1127,7 +1127,7 @@ function dayKeys(n, dir = -1) {
 function bars(items, cls = '') {
   const max = Math.max(1, ...items.map((x) => x.value));
   return `<div class="bars ${cls}">${items.map((x) => `
-    <div class="bar ${x.today ? 'today' : ''}" title="${x.value}">
+    <div class="bar ${x.today ? 'is-today' : ''}" title="${x.value}">
       <b>${x.value || ''}</b>
       <span class="bar-col"><span style="height:${(x.value / max) * 100}%"></span></span>
       <small>${x.label}</small>${x.sub != null ? `<small class="bar-sub">${x.sub}</small>` : ''}

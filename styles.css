@@ -549,7 +549,7 @@ mark {
 .bar-col span { display: block; width: 100%; background: var(--hard); border-radius: 8px 8px 0 0; min-height: 0; }
 .forecast .bar-col span { background: var(--primary); }
 .bar small { font-size: 12px; color: var(--muted); }
-.bar.today small:first-of-type { color: var(--text); font-weight: 600; }
+.bar.is-today small:first-of-type { color: var(--text); font-weight: 600; }
 .bar-sub { font-size: 11px !important; color: var(--good-dark) !important; min-height: 14px; }
 @media (prefers-color-scheme: dark) { .bar-sub { color: var(--good) !important; } }
 .p-young { background: color-mix(in srgb, var(--mastered) 55%, transparent); }
