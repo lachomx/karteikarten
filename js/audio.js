@@ -1,6 +1,32 @@
-// Audio: Sprachausgabe über die Web Speech API (ko-KR) und eigene Aufnahmen pro Karte.
-// Hat eine Karte eine eigene Aufnahme, wird diese statt der Computerstimme abgespielt.
+// Audio: eigene Aufnahmen pro Karte, fertige Aussprache-Dateien und Sprachausgabe über die Web Speech API (ko-KR).
+// Reihenfolge: eigene Aufnahme → Aussprache-Datei (für alle Karten des Vokabelplans, Stimme „Yuna“) → Sprachausgabe.
+// Die Dateien laufen als normales Audio und funktionieren daher auch auf dem iPhone zuverlässig.
 import { getAudio } from './store.js';
+import { planKey } from './daily.js';
+
+// ---------- Aussprache-Dateien (erzeugt mit Koreanisch/tools/audio.mjs, liegen bei der Lernplan-App) ----------
+const AUDIO_BASE = 'https://lachomx.github.io/lernplan/audio/';
+let audioIndex = new Set();
+fetch(AUDIO_BASE + 'index.json')
+  .then((r) => (r.ok ? r.json() : []))
+  .then((keys) => (audioIndex = new Set(keys)))
+  .catch(() => {});
+export const audioFileCount = () => audioIndex.size;
+
+/** Schlüssel einer Karte: 64-Bit-FNV-1a über die Vorderseite ohne HTML (wie audioKey in tools/audio.mjs) */
+function audioKey(text) {
+  let a = 0x811c9dc5, b = 0x050c5d1f;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193) >>> 0;
+    b = Math.imul(b ^ c, 0x01000193) >>> 0;
+  }
+  return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0');
+}
+const fileUrl = (card) => {
+  const k = audioKey(planKey(card.front));
+  return audioIndex.has(k) ? AUDIO_BASE + k + '.m4a' : null;
+};
 
 const HANGUL = /[ᄀ-ᇿ㄰-㆏가-힯]/;
 export const ttsSupported = typeof speechSynthesis !== 'undefined';
@@ -134,10 +160,11 @@ export async function prepareAudio(card) {
   if (blob) urls.set(id, URL.createObjectURL(blob));
 }
 
-export function playUrl(url) {
+export function playUrl(url, onFail) {
   stop();
   player = new Audio(url);
-  return player.play().catch(() => {});
+  if (onFail) player.onerror = onFail;
+  return player.play().catch((e) => e?.name !== 'AbortError' && onFail?.());
 }
 
 /** Seite mit Koreanisch: 'front', 'back' oder null */
@@ -145,7 +172,7 @@ export function koreanSide(card) {
   return hasKorean(card.front) ? 'front' : hasKorean(card.back) ? 'back' : card.audio ? 'front' : null;
 }
 
-/** Spielt die eigene Aufnahme oder liest die koreanische Seite vor. Rückgabe: 'audio' | 'tts' | false */
+/** Spielt die eigene Aufnahme, die Aussprache-Datei oder liest die koreanische Seite vor. Rückgabe: 'audio' | 'file' | 'tts' | false */
 export function playCard(card) {
   const url = card.audio && urls.get(card.audio.id);
   if (url) {
@@ -153,6 +180,11 @@ export function playCard(card) {
     return 'audio';
   }
   const side = koreanSide(card);
+  const file = side && fileUrl(card);
+  if (file) {
+    playUrl(file, () => speak(speechText(card[side]))); // ohne Netz: Sprachausgabe als Ersatz
+    return 'file';
+  }
   return side && speak(speechText(card[side])) ? 'tts' : false;
 }
 

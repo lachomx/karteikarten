@@ -3,7 +3,7 @@ import {
   cardsOf, createCard, updateCard, deleteCard, newIntroducedToday, recordReview, streak, reviewsToday, goalReached, finishedToday, longestStreak, activeDays, DEFAULT_SETTINGS,
   dayCount, exportState, settingsChanged, isTestDb, ratingsOn, uid, putAudio, deleteAudio,
 } from './store.js';
-import { audioPrefs, ttsSupported, recordSupported, koreanVoice, koreanSide, speechText, speak, stop as stopAudio, prepareAudio, playCard, playUrl, startRecording } from './audio.js';
+import { audioPrefs, audioFileCount, ttsSupported, recordSupported, koreanVoice, koreanSide, speechText, speak, stop as stopAudio, prepareAudio, playCard, playUrl, startRecording } from './audio.js';
 import { initSync, onStatus, getStatus, signIn, signUp, signOut, syncNow } from './sync.js';
 import { schedule, planOf, newCardFields, formatInterval, category, endOfDay, startOfDay, dayKey, statusFields, STATUSES, DAY } from './scheduler.js';
 import { SEPARATORS, parseImport, parseTags, fieldToHtml } from './importer.js';
@@ -1790,9 +1790,10 @@ function viewSettings() {
     const v = koreanVoice();
     const el = app.querySelector('[data-voice]');
     if (!el) return;
-    el.textContent = !ttsSupported ? 'Dieser Browser hat keine Sprachausgabe.'
+    const files = audioFileCount() ? `Aussprache-Dateien für ${audioFileCount()} Karten (Stimme Yuna). Andere Karten: ` : '';
+    el.textContent = files + (!ttsSupported ? 'Dieser Browser hat keine Sprachausgabe.'
       : v ? v.name
-        : 'Nicht gefunden. iPhone: Einstellungen › Bedienungshilfen › Gesprochene Inhalte › Stimmen › Koreanisch. Mac: Systemeinstellungen › Bedienungshilfen › Gesprochene Inhalte › Systemstimme › Stimmen verwalten.';
+        : 'Nicht gefunden. iPhone: Einstellungen › Bedienungshilfen › Gesprochene Inhalte › Stimmen › Koreanisch. Mac: Systemeinstellungen › Bedienungshilfen › Gesprochene Inhalte › Systemstimme › Stimmen verwalten.');
   };
   voiceInfo();
   setTimeout(voiceInfo, 800); // Chrome liefert die Stimmen erst verzögert
