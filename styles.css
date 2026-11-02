@@ -584,3 +584,15 @@ mark {
 .quick-field { height: auto; min-height: 64px; padding: 12px 14px; resize: vertical; font: inherit; font-size: 18px; line-height: 1.4; }
 .quick .btn.big { margin-top: 18px; }
 .quick .card-item { color: inherit; }
+
+/* ---------- Tags ---------- */
+.card-tags { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 6px; }
+.card-tags span, .tag-inline {
+  display: inline-block; padding: 1px 8px; border-radius: 99px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary);
+  font-size: 12px; font-weight: 600;
+}
+.tag-inline { font-size: 0.85em; margin-right: 6px; }
+.chips .head-actions { display: flex; gap: 8px; min-width: 0; }
+.chips .chip.active svg { color: #fff; }
+.import-option .input { margin-bottom: 4px; }

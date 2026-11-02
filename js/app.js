@@ -13,12 +13,17 @@ const app = document.getElementById('app');
 const go = (hash) => (location.hash = hash);
 
 // ================= Zählungen =================
-/** Zählung nur der Karten, die direkt in diesem Deck liegen (ohne Unterdecks); bekannte (ausgesetzte) Karten sind nie fällig */
-function ownCounts(deckId, now = Date.now()) {
+const ALL = '__all'; // Lernen über alle Decks (z. B. nach Tag)
+const hasTag = (card, tag) => !tag || (card.tags ?? []).includes(tag);
+
+/** Zählung nur der Karten, die direkt in diesem Deck liegen (ohne Unterdecks); bekannte (ausgesetzte) Karten sind nie fällig.
+ *  Mit tag zählen nur Karten mit diesem Tag. */
+function ownCounts(deckId, tag = null, now = Date.now()) {
   const eod = endOfDay(now);
   const cat = { new: 0, learning: 0, mastered: 0, known: 0 };
   let newCount = 0, learn = 0, review = 0, total = 0;
   for (const c of cardsOf(deckId)) {
+    if (!hasTag(c, tag)) continue;
     total++;
     cat[category(c)]++;
     if (c.suspended) continue;
@@ -30,10 +35,10 @@ function ownCounts(deckId, now = Date.now()) {
 }
 
 /** Zählung über alle Decks unterhalb eines Ordners bzw. über ein Deck samt Unterdecks */
-function nodeCounts(id) {
+function nodeCounts(id, tag = null) {
   const sum = { newAvail: 0, learn: 0, review: 0, due: 0, total: 0, cat: { new: 0, learning: 0, mastered: 0, known: 0 } };
-  for (const d of descendantDecks(id)) {
-    const c = ownCounts(d.id);
+  for (const d of decksIn(id)) {
+    const c = ownCounts(d.id, tag);
     for (const k of ['newAvail', 'learn', 'review', 'due', 'total']) sum[k] += c[k];
     for (const k in sum.cat) sum.cat[k] += c.cat[k];
   }
@@ -44,8 +49,21 @@ const deckCounts = nodeCounts;
 /** Href eines Knotens (Ordner oder Deck) bzw. der Startseite */
 const nodeHref = (id) => (S.nodes[id] ? `#/${S.nodes[id].type}/${id}` : '#/');
 
+/** Decks unterhalb eines Knotens bzw. alle Decks */
+const decksIn = (id) => (id === ALL ? allDecksInOrder() : descendantDecks(id));
+
 /** Karten eines Decks samt Unterdecks */
-const cardsWithin = (deckId) => descendantDecks(deckId).flatMap((d) => cardsOf(d.id));
+const cardsWithin = (deckId) => decksIn(deckId).flatMap((d) => cardsOf(d.id));
+
+/** Tags der Karten mit Anzahl, häufigste zuerst */
+function tagCounts(cards) {
+  const m = new Map();
+  for (const c of cards) for (const t of c.tags ?? []) m.set(t, (m.get(t) ?? 0) + 1);
+  return [...m].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'de'));
+}
+
+const studyHref = (deckId, tag) => `#/study/${deckId}${tag ? `/${encodeURIComponent(tag)}` : ''}`;
+const tagChips = (tags) => (tags?.length ? `<div class="card-tags">${tags.map((t) => `<span>#${esc(t)}</span>`).join('')}</div>` : '');
 
 /** Statuszeile unter Ordnern und Decks (HTML) */
 function subLabel(c) {
@@ -331,18 +349,23 @@ function viewFolder(id) {
 }
 
 // ================= Deck =================
-const deckUi = { sort: 'newest', filter: 'all', search: '' };
+const deckUi = { sort: 'newest', filter: 'all', search: '', tag: null, deckId: null };
 const SORTS = { newest: 'Neueste', oldest: 'Älteste', az: 'A–Z' };
 const FILTERS = { all: 'Alle', new: 'Nicht gelernt', learning: 'In Bearbeitung', mastered: 'Gemeistert', known: 'Bekannt (ausgesetzt)' };
 
 function viewDeck(id) {
   const d = S.nodes[id];
   if (!d || d.type !== 'deck') return go('#/');
-  const c = deckCounts(id);
+  if (deckUi.deckId !== id) Object.assign(deckUi, { deckId: id, tag: null });
+  const allCards = cardsWithin(id);
+  const tags = tagCounts(allCards);
+  if (deckUi.tag && !tags.some(([t]) => t === deckUi.tag)) deckUi.tag = null;
+  const tag = deckUi.tag;
+  const c = deckCounts(id, tag);
   const subs = children(id);
   const q = deckUi.search.toLowerCase();
-  let cards = cardsWithin(id).filter((card) => deckUi.filter === 'all' || category(card) === deckUi.filter);
-  if (q) cards = cards.filter((card) => (plainText(card.front) + ' ' + plainText(card.back)).toLowerCase().includes(q));
+  let cards = allCards.filter((card) => (deckUi.filter === 'all' || category(card) === deckUi.filter) && hasTag(card, tag));
+  if (q) cards = cards.filter((card) => (plainText(card.front) + ' ' + plainText(card.back) + ' ' + (card.tags ?? []).map((t) => '#' + t).join(' ')).toLowerCase().includes(q));
   cards.sort((a, b) =>
     deckUi.sort === 'newest' ? b.createdAt - a.createdAt
       : deckUi.sort === 'oldest' ? a.createdAt - b.createdAt
@@ -363,14 +386,14 @@ function viewDeck(id) {
 
       <section class="today">
         <div class="today-num">${c.due}</div>
-        <div class="today-label">${c.due === 1 ? 'Karte' : 'Karten'} für heute</div>
+        <div class="today-label">${c.due === 1 ? 'Karte' : 'Karten'} für heute${tag ? ` mit <span class="tag-inline">#${esc(tag)}</span>` : ''}</div>
         <div class="today-split">
           <div><span class="ic c-gray">${icon.newCard}</span><b>${c.newAvail}</b><small>Nicht gelernte</small></div>
           <div><span class="ic c-sky">${icon.clock}</span><b>${c.learn + c.review}</b><small>Wiederholen</small></div>
           <div><span class="ic c-blue">${icon.mastered}</span><b>${c.cat.mastered}</b><small>Gemeisterte</small></div>
         </div>
         ${c.due
-          ? `<a class="btn primary big" href="#/study/${id}">Karten lernen</a>`
+          ? `<a class="btn primary big" href="${studyHref(id, tag)}">${tag ? `#${esc(tag)} lernen` : 'Karten lernen'}</a>`
           : `<button class="btn ghost big" disabled>${c.total ? 'Für heute erledigt 🎉' : 'Füge zuerst Karten hinzu'}</button>`}
         ${unsorted ? `<a class="sort-link" href="#/sort/${id}">${icon.sort}${unsorted} neue ${unsorted === 1 ? 'Karte' : 'Karten'} sortieren: bekannt · eingeschlafen · neu</a>` : ''}
       </section>
@@ -384,7 +407,7 @@ function viewDeck(id) {
         : '<p class="muted small sub-hint">Teile das Deck auf, z. B. in ein Unterdeck pro Vorlesung. Hier lernst du dann alle Karten zusammen.</p>'}
 
       <div class="deck-head">
-        <h3>Karten im Deck (${c.total})</h3>
+        <h3>${tag ? `Karten mit #${esc(tag)}` : 'Karten im Deck'} (${c.total})</h3>
       </div>
       <div class="progress big"><span class="p-mastered" style="width:${pct(c.cat.mastered)}%"></span><span class="p-learning" style="width:${pct(c.cat.learning)}%"></span><span class="p-known" style="width:${pct(c.cat.known)}%"></span></div>
       <div class="legend">
@@ -397,7 +420,10 @@ function viewDeck(id) {
       <label class="search-wrap">${icon.search}<input class="input search" type="search" placeholder="Karten durchsuchen" value="${esc(deckUi.search)}" /></label>
       <div class="chips">
         <button class="chip" data-sort>${icon.sort}${SORTS[deckUi.sort]}</button>
-        <button class="chip" data-filter>${FILTERS[deckUi.filter]}</button>
+        <span class="head-actions">
+          ${tags.length ? `<button class="chip ${tag ? 'active' : ''}" data-tag>#${tag ? esc(tag) : 'Tags'}</button>` : ''}
+          <button class="chip" data-filter>${FILTERS[deckUi.filter]}</button>
+        </span>
       </div>
 
       <div class="card-list">
@@ -406,6 +432,7 @@ function viewDeck(id) {
             <div class="card-text">
               <div class="card-front">${esc(plainText(card.front))}${card.suspended ? '<span class="tag-known">Bekannt</span>' : card.state !== 'new' && card.due <= eod ? '<span class="tag-today">Heute</span>' : ''}${card.deckId !== id && S.nodes[card.deckId] ? `<span class="tag-deck">${esc(S.nodes[card.deckId].name)}</span>` : ''}</div>
               <div class="card-back">${esc(plainText(card.back))}</div>
+              ${tagChips(card.tags)}
             </div>
             <button class="icon-btn small" data-card-menu="${card.id}" aria-label="Kartenmenü">${icon.more}</button>
           </div>`).join('') || (c.total ? '<p class="muted center">Keine Karten gefunden.</p>' : '')}
@@ -429,6 +456,11 @@ function viewDeck(id) {
     const keys = Object.keys(SORTS);
     deckUi.sort = keys[(keys.indexOf(deckUi.sort) + 1) % keys.length];
     render();
+  };
+  const tagBtn = app.querySelector('[data-tag]');
+  if (tagBtn) tagBtn.onclick = async () => {
+    const v = await menu([{ label: 'Alle Karten', value: '__none' }, ...tags.map(([t, n]) => ({ label: `#${t} (${n})`, value: t }))], 'Nach Tag filtern');
+    if (v) (deckUi.tag = v === '__none' ? null : v), render();
   };
   app.querySelector('[data-filter]').onclick = async () => {
     const v = await menu(Object.entries(FILTERS).map(([value, label]) => ({ label, value })), 'Filtern');
@@ -495,7 +527,7 @@ function viewEditor({ deckId, cardId, from }) {
   if (cardId && !card) return go('#/');
   deckId ??= card.deckId;
   if (!S.nodes[deckId]) return go('#/');
-  const backHref = from === 'study' ? `#/study/${deckId}` : `#/deck/${deckId}`;
+  const backHref = from === 'study' ? (session ? studyHref(session.deckId, session.tag) : studyHref(deckId)) : `#/deck/${deckId}`;
 
   app.innerHTML = `
     <header class="topbar">
@@ -517,6 +549,8 @@ function viewEditor({ deckId, cardId, from }) {
         <input type="file" accept="audio/*" hidden data-audio-input />
       </div>
       <p class="hint" data-audio-status></p>
+      <label class="field-label" for="e-tags">Tags <small>– mit Leerzeichen getrennt, z. B. klettern alltag</small></label>
+      <input class="input" id="e-tags" data-tags autocomplete="off" autocapitalize="none" value="${esc((card?.tags ?? []).join(' '))}" />
       ${card ? '' : `
       <label class="toggle-row">
         <span class="ic">${icon.swap}</span><span class="grow">Umkehrkarten<small>Legt zusätzlich eine Karte mit vertauschten Seiten an</small></span>
@@ -717,17 +751,18 @@ function viewEditor({ deckId, cardId, from }) {
     if (recorder) recBtn.click();
     const f = sanitize(front.innerHTML);
     const b = sanitize(back.innerHTML);
+    const tags = parseTags(app.querySelector('[data-tags]').value);
     if (card) {
       const newAudio = await commitAudio();
       if (card.audio && card.audio.id !== newAudio?.id) deleteAudio(card.audio.id).catch(() => {});
-      updateCard(card.id, { front: f, back: b, audio: newAudio });
+      updateCard(card.id, { front: f, back: b, audio: newAudio, tags });
       toast('Gespeichert');
       go(backHref);
       return;
     }
-    createCard(deckId, f, b, { audio: await commitAudio() });
+    createCard(deckId, f, b, { audio: await commitAudio(), tags });
     const reverse = app.querySelector('[data-reverse]')?.checked;
-    if (reverse) createCard(deckId, b, f, { audio: await commitAudio() }); // eigene Kopie der Aufnahme
+    if (reverse) createCard(deckId, b, f, { audio: await commitAudio(), tags }); // eigene Kopie der Aufnahme
     toast(reverse ? '2 Karten hinzugefügt' : 'Karte hinzugefügt');
     front.innerHTML = back.innerHTML = '';
     audio = null;
@@ -782,6 +817,10 @@ function viewImport(deckId) {
           ${Object.entries(IMPORT_STATUS).map(([v, l]) => `<button class="chip ${importUi.status === v ? 'active' : ''}" data-status="${v}">${l}</button>`).join('')}
         </div>
       </div>
+      <div class="import-option">
+        <span>Tags für alle Karten<small>Optional, mit Leerzeichen getrennt – zusätzlich zur Spalte <i>tags</i> in der Datei</small></span>
+        <input class="input" data-import-tags autocomplete="off" autocapitalize="none" placeholder="z. B. yonsei kapitel3" />
+      </div>
       <div class="import-preview"></div>
       <button class="btn primary big" data-import disabled>Importieren</button>
     </main>`;
@@ -809,6 +848,8 @@ function viewImport(deckId) {
       const st = statusOf(card);
       byStatus[st] = (byStatus[st] ?? 0) + 1;
     }
+    const tagged = parsed.cards.filter((card) => card[2]?.tags.length).length;
+    if (tagged) notes.push(`${tagged} mit Tags`);
     if (byStatus.eingeschlafen || byStatus.bekannt) notes.push(Object.entries(byStatus).map(([k, n]) => `${n} ${STATUSES[k].toLowerCase()}`).join(', '));
     preview.innerHTML = `
       <div class="preview-head">${parsed.cards.length} ${parsed.cards.length === 1 ? 'Karte' : 'Karten'} erkannt${notes.map((x) => ` · ${x}`).join('')}</div>
@@ -846,7 +887,8 @@ function viewImport(deckId) {
     let i = 0;
     for (const card of parsed.cards) {
       const [front, back] = card;
-      const extra = () => statusFields(statusOf(card), S.settings);
+      const tags = [...new Set([...(card[2]?.tags ?? []), ...parseTags(app.querySelector('[data-import-tags]').value)])];
+      const extra = () => ({ ...statusFields(statusOf(card), S.settings), ...(tags.length ? { tags } : {}) });
       createCard(deckId, front, back, extra()).createdAt = base + i++;
       if (reverse.checked) createCard(deckId, back, front, extra()).createdAt = base + i++;
     }
@@ -863,16 +905,16 @@ function viewImport(deckId) {
 let session = null;
 const isLearning = (c) => c.state === 'learning' || c.state === 'relearning';
 
-function startSession(deckId) {
+function startSession(deckId, tag = null) {
   const eod = endOfDay();
-  const cards = cardsWithin(deckId).filter((c) => !c.suspended);
+  const cards = cardsWithin(deckId).filter((c) => !c.suspended && hasTag(c, tag));
   const learn = cards.filter((c) => isLearning(c) && c.due <= eod).sort((a, b) => a.due - b.due);
   const review = cards.filter((c) => c.state === 'review' && c.due <= eod).sort((a, b) => a.due - b.due);
   // Neue Karten: je Deck bis zu dessen Tageslimit, in Reihenfolge der Decks (Hauptdeck, dann Unterdecks)
-  const news = descendantDecks(deckId).flatMap((d) =>
-    cardsOf(d.id).filter((c) => c.state === 'new' && !c.suspended).sort((a, b) => a.createdAt - b.createdAt).slice(0, ownCounts(d.id).newAvail));
+  const news = decksIn(deckId).flatMap((d) =>
+    cardsOf(d.id).filter((c) => c.state === 'new' && !c.suspended && hasTag(c, tag)).sort((a, b) => a.createdAt - b.createdAt).slice(0, ownCounts(d.id, tag).newAvail));
   const ids = [...learn, ...review, ...news].map((c) => c.id);
-  session = { deckId, ids, total: ids.length, done: 0, current: null, revealed: false, history: [], startedDay: dayKey(), turn: 0, spoken: null };
+  session = { deckId, tag, ids, total: ids.length, done: 0, current: null, revealed: false, history: [], startedDay: dayKey(), turn: 0, spoken: null };
 }
 
 function nextCard() {
@@ -922,10 +964,10 @@ function undo() {
   render();
 }
 
-function viewStudy(deckId) {
-  const d = S.nodes[deckId];
-  if (!d) return go('#/');
-  if (!session || session.deckId !== deckId || session.startedDay !== dayKey()) startSession(deckId);
+function viewStudy(deckId, tag = null) {
+  if (!S.nodes[deckId] && deckId !== ALL) return go('#/');
+  if (!session || session.deckId !== deckId || session.tag !== tag || session.startedDay !== dayKey()) startSession(deckId, tag);
+  const exitHref = deckId === ALL ? '#/stats' : `#/deck/${deckId}`;
   if (session.current && !S.cards[session.current.id]) session.current = null; // währenddessen gelöscht
   if (!session.current) session.current = nextCard();
   const card = session.current ? S.cards[session.current.id] : null;
@@ -934,8 +976,8 @@ function viewStudy(deckId) {
   const pct = session.total ? (session.done / session.total) * 100 : 100;
   const top = `
     <header class="topbar study-top">
-      <a class="icon-btn" href="#/deck/${deckId}" data-exit aria-label="Beenden">${icon.close}</a>
-      <span class="counter"><b>${session.done}</b>/${session.total}</span>
+      <a class="icon-btn" href="${exitHref}" data-exit aria-label="Beenden">${icon.close}</a>
+      <span class="counter">${tag ? `<span class="tag-inline">#${esc(tag)}</span>` : ''}<b>${session.done}</b>/${session.total}</span>
       <button class="icon-btn" data-menu aria-label="Menü" ${card ? '' : 'disabled'}>${icon.more}</button>
     </header>
     <div class="study-progress"><span style="width:${pct}%"></span></div>`;
@@ -951,7 +993,7 @@ function viewStudy(deckId) {
         ${left > 0
           ? `<p class="muted">Noch ${left} ${left === 1 ? 'Karte' : 'Karten'} bis zum Tagesziel.</p>`
           : `<p class="streak-line">${icon.flame} Tagesziel erreicht · ${s} ${s === 1 ? 'Tag' : 'Tage'} in Folge</p>`}
-        <a class="btn primary big" href="#/deck/${deckId}" data-exit>Zurück zum Deck</a>
+        <a class="btn primary big" href="${exitHref}" data-exit>${deckId === ALL ? 'Zurück zur Statistik' : 'Zurück zum Deck'}</a>
       </main>`;
     app.querySelectorAll('[data-exit]').forEach((a) => a.addEventListener('click', () => (session = null)));
     return;
@@ -1135,6 +1177,7 @@ function viewStats() {
     const k = c.due <= eod ? next[0] : dayKey(c.due);
     if (k in forecast) forecast[k]++;
   }
+  const tagRows = tagCounts(Object.values(S.cards)).map(([t, n]) => [t, n, nodeCounts(ALL, t).due]);
   const total = Object.keys(S.cards).length;
   const seg = (n, cls) => (total ? `<span class="${cls}" style="width:${(n / total) * 100}%"></span>` : '');
 
@@ -1174,6 +1217,16 @@ function viewStats() {
           </a>`).join('') + `<div class="due-row total"><span class="grow">Gesamt</span><span class="due-split"><span class="c-sky">${reviewsDue}</span> · <span class="muted">${dueToday - reviewsDue} neu</span></span><b>${dueToday}</b></div>`
           : '<p class="muted">Noch keine Karten.</p>'}
       </section>
+
+      ${tagRows.length ? `<h3 class="section-label">Tags</h3>
+      <section class="stat-box deck-due">
+        ${tagRows.map(([t, n, due]) => `
+          <${due ? `a href="${studyHref(ALL, t)}"` : 'div'} class="due-row">
+            <span class="grow">#${esc(t)} <span class="muted small">${n} ${n === 1 ? 'Karte' : 'Karten'}</span></span>
+            ${due ? `<span class="due-split c-sky">lernen</span>` : ''}<b>${due}</b>
+          </${due ? 'a' : 'div'}>`).join('')}
+        <p class="muted small">Tippe auf einen Tag, um seine fälligen Karten aus allen Decks zu lernen.</p>
+      </section>` : ''}
 
       <h3 class="section-label">Kartenbestand (${total})</h3>
       <section class="stat-box">
@@ -1581,7 +1634,7 @@ function render() {
   else if (view === 'deck') viewDeck(id);
   else if (view === 'add') viewEditor({ deckId: id });
   else if (view === 'edit') viewEditor({ cardId: id, from: extra });
-  else if (view === 'study') viewStudy(id);
+  else if (view === 'study') viewStudy(id, extra ? decodeURIComponent(extra) : null);
   else if (view === 'import') viewImport(id);
   else if (view === 'settings') viewSettings();
   else if (view === 'stats') viewStats();
