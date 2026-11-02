@@ -6,7 +6,7 @@ import {
 import { audioPrefs, ttsSupported, recordSupported, koreanVoice, koreanSide, speechText, speak, stop as stopAudio, prepareAudio, playCard, playUrl, startRecording } from './audio.js';
 import { initSync, onStatus, getStatus, signIn, signUp, signOut, syncNow } from './sync.js';
 import { schedule, planOf, newCardFields, formatInterval, category, endOfDay, startOfDay, dayKey, statusFields, STATUSES, DAY } from './scheduler.js';
-import { SEPARATORS, parseImport } from './importer.js';
+import { SEPARATORS, parseImport, parseTags, fieldToHtml } from './importer.js';
 import { icon, esc, sanitize, plainText, isEmptyHtml, menu, prompt, confirm, toast, readImage, openSheet, TEXT_COLORS } from './ui.js';
 
 const app = document.getElementById('app');
@@ -155,6 +155,7 @@ function tabbar(active) {
   return `<nav class="tabbar">
     <a href="#/" class="${active === 'home' ? 'active' : ''}">${icon.home}<span>Startseite</span></a>
     <a href="#/stats" class="${active === 'stats' ? 'active' : ''}">${icon.chart}<span>Statistik</span></a>
+    <a href="#/quick" class="${active === 'quick' ? 'active' : ''}">${icon.pencil}<span>Neuer Satz</span></a>
     <a href="#/settings" class="${active === 'settings' ? 'active' : ''}">${icon.gear}<span>Einstellungen</span></a>
   </nav>`;
 }
@@ -553,7 +554,7 @@ function viewEditor({ deckId, cardId, from }) {
 
   const update = () => {
     for (const f of [front, back]) if (isEmptyHtml(f.innerHTML) && !f.querySelector('img')) f.innerHTML = '';
-    saveBtn.disabled = !(front.innerHTML && back.innerHTML);
+    saveBtn.disabled = !front.innerHTML; // Rückseite ist optional (z. B. Übersetzung später ergänzen)
   };
   [front, back].forEach((f) => {
     f.addEventListener('input', (e) => {
@@ -969,7 +970,7 @@ function viewStudy(deckId) {
       <article class="study-card">
         ${canSpeak ? `<button class="speak-btn" data-speak aria-label="Vorlesen" title="Vorlesen (V)">${icon.speaker}</button>` : ''}
         <div class="card-content ${isLong(card.front) ? 'long' : ''}">${sanitize(card.front)}</div>
-        ${session.revealed ? `<hr /><div class="card-content ${isLong(card.back) ? 'long' : ''}">${sanitize(card.back)}</div>` : ''}
+        ${session.revealed ? `<hr />${isEmptyHtml(card.back) && !/<img/i.test(card.back ?? '') ? '<p class="muted small">Noch keine Rückseite – über ⋯ › Karte bearbeiten ergänzen</p>' : `<div class="card-content ${isLong(card.back) ? 'long' : ''}">${sanitize(card.back)}</div>`}` : ''}
       </article>
     </main>
     <footer class="study-actions">
@@ -1294,6 +1295,84 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'v' && app.querySelector('[data-speak]')) speakCard(S.cards[sorting.ids[sorting.index]]);
 });
 
+// ================= Schnelleingabe =================
+// Am Handy schnell einen Satz anlegen: Ziel-Deck vorausgewählt, Rückseite und Tags optional.
+const QUICK_DECK_NAME = '08 Eigene Sätze';
+const quickUi = { added: [], tags: '' };
+
+function quickDefaultDeck() {
+  try {
+    const saved = localStorage.getItem('quickDeck');
+    if (S.nodes[saved]?.type === 'deck') return saved;
+  } catch {}
+  return allDecksInOrder().find((d) => /eigene sätze/i.test(d.name))?.id ?? '__new';
+}
+
+/** „08 Eigene Sätze“ neben die anderen nummerierten Decks (01 …, 02 …) legen, sonst auf die Startseite */
+function createQuickDeck() {
+  const sibling = allDecksInOrder().find((d) => /^0\d\b/.test(d.name));
+  return createNode('deck', QUICK_DECK_NAME, sibling?.parentId ?? null);
+}
+
+function viewQuick() {
+  const decks = allDecksInOrder();
+  const selected = quickDefaultDeck();
+  const hasOwn = decks.some((d) => /eigene sätze/i.test(d.name));
+  app.innerHTML = `
+    <header class="topbar"><span></span><h1>Neuer Satz</h1><span></span></header>
+    <main class="page with-tabbar quick">
+      <label class="field-label" for="q-deck">Deck</label>
+      <select class="input" id="q-deck" data-deck>
+        ${hasOwn ? '' : `<option value="__new" ${selected === '__new' ? 'selected' : ''}>＋ Neues Deck „${QUICK_DECK_NAME}“</option>`}
+        ${decks.map((d) => `<option value="${d.id}" ${d.id === selected ? 'selected' : ''}>${path(d.id).map((n) => esc(n.name)).join(' › ')}</option>`).join('')}
+      </select>
+      <label class="field-label" for="q-front">Vorderseite</label>
+      <textarea class="input quick-field" id="q-front" rows="2" enterkeyhint="next" placeholder="z. B. 저는 {{클라이밍}}을 좋아해요." data-front></textarea>
+      <label class="field-label" for="q-back">Rückseite <small>(optional)</small></label>
+      <textarea class="input quick-field" id="q-back" rows="2" enterkeyhint="next" placeholder="z. B. Ich mag Klettern." data-back></textarea>
+      <label class="field-label" for="q-tags">Tags <small>(optional, mit Leerzeichen getrennt)</small></label>
+      <input class="input" id="q-tags" enterkeyhint="done" autocomplete="off" autocapitalize="none" placeholder="z. B. klettern alltag" value="${esc(quickUi.tags)}" data-tags />
+      <button class="btn primary big" data-quick-save disabled>Speichern</button>
+      <p class="hint">Enter springt ins nächste Feld und speichert am Ende, Umschalt + Enter macht einen Zeilenumbruch. <b>{{Wort}}</b> hebt das Zielwort hervor. Die Tags bleiben für die nächste Karte stehen.</p>
+      ${quickUi.added.length ? `<h3 class="section-label">Gerade hinzugefügt (${quickUi.added.length})</h3>
+        <div class="card-list">${quickUi.added.slice(-5).reverse().filter((id) => S.cards[id]).map((id) => `
+          <a class="card-item" href="#/edit/${id}"><div class="card-text"><div class="card-front">${esc(plainText(S.cards[id].front))}</div><div class="card-back">${esc(plainText(S.cards[id].back)) || '–'}</div></div></a>`).join('')}</div>` : ''}
+    </main>
+    ${tabbar('quick')}`;
+
+  const deckSel = app.querySelector('[data-deck]');
+  const front = app.querySelector('[data-front]');
+  const back = app.querySelector('[data-back]');
+  const tags = app.querySelector('[data-tags]');
+  const btn = app.querySelector('[data-quick-save]');
+  const fields = [front, back, tags];
+  front.addEventListener('input', () => (btn.disabled = !front.value.trim()));
+  tags.addEventListener('input', () => (quickUi.tags = tags.value));
+  const save = () => {
+    const text = front.value.trim();
+    if (!text) return front.focus();
+    let deckId = deckSel.value;
+    if (deckId === '__new') deckId = createQuickDeck().id;
+    try {
+      localStorage.setItem('quickDeck', deckId);
+    } catch {}
+    const card = createCard(deckId, fieldToHtml(text), back.value.trim() ? fieldToHtml(back.value.trim()) : '', { tags: parseTags(tags.value) });
+    quickUi.added.push(card.id);
+    session = null;
+    toast('Gespeichert');
+    render(); // Felder leeren, Liste aktualisieren
+    app.querySelector('[data-front]').focus();
+  };
+  btn.onclick = save;
+  fields.forEach((f, i) => f.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+    e.preventDefault();
+    if (e.metaKey || e.ctrlKey || i === fields.length - 1) save();
+    else fields[i + 1].focus();
+  }));
+  front.focus();
+}
+
 // ================= Einstellungen =================
 function viewSettings() {
   const st = S.settings;
@@ -1507,6 +1586,7 @@ function render() {
   else if (view === 'settings') viewSettings();
   else if (view === 'stats') viewStats();
   else if (view === 'sort') viewSort(id);
+  else if (view === 'quick') viewQuick();
   else viewHome();
   if (route !== lastRoute) {
     window.scrollTo(0, 0);
@@ -1521,7 +1601,7 @@ await load();
 render();
 // Änderungen von anderen Geräten anzeigen – aber keine offenen Eingaben (Editor, Import) überschreiben
 if (!isTestDb) initSync(() => {
-  if (!/^#\/(add|edit|import)\//.test(location.hash) && !document.querySelector('.sheet-backdrop')) render();
+  if (!/^#\/(add|edit|import|quick)\b/.test(location.hash) && !document.querySelector('.sheet-backdrop')) render();
 });
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
