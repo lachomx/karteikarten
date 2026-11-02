@@ -224,7 +224,8 @@ function viewHome() {
       <a class="btn primary big" href="#/study/${deck.id}">Mit ${due} ${due === 1 ? 'Karte' : 'Karten'} starten</a>
     </section>`;
   } else if (Object.values(S.cards).length) {
-    hero = `<section class="hero done"><h2>Alles erledigt für heute 🎉</h2><p class="muted">Komm morgen wieder, dann warten neue Wiederholungen auf dich.</p></section>`;
+    const n = recapCards().length;
+    hero = `<section class="hero done"><h2>Alles erledigt für heute 🎉</h2><p class="muted">${n ? 'Am Abend festigt eine kurze Runde die heute gelernten Karten.' : 'Komm morgen wieder, dann warten neue Wiederholungen auf dich.'}</p>${n ? `<a class="btn primary big" href="#/recap">Abendrunde: ${n} Karten</a>` : ''}</section>`;
   }
 
   const list = roots.length
@@ -997,6 +998,7 @@ function viewStudy(deckId, tag = null) {
           ? `<p class="muted">Noch ${left} ${left === 1 ? 'Karte' : 'Karten'} bis zum Tagesziel.</p>`
           : `<p class="streak-line">${icon.flame} Tagesziel erreicht · ${s} ${s === 1 ? 'Tag' : 'Tage'} in Folge</p>`}
         <a class="btn primary big" href="${exitHref}" data-exit>${deckId === ALL ? 'Zurück zur Statistik' : 'Zurück zum Deck'}</a>
+        ${isPlanFolderOrDeck(deckId) && recapCards().length ? `<a class="btn ghost big" href="#/recap" data-exit>Abendrunde: heutige Karten noch einmal</a>` : ''}
       </main>`;
     app.querySelectorAll('[data-exit]').forEach((a) => a.addEventListener('click', () => (session = null)));
     return;
@@ -1101,6 +1103,20 @@ document.addEventListener('keydown', (e) => {
     undo();
   } else if (e.key === 'v' && app.querySelector('[data-speak]')) {
     speakCard(session.current);
+  }
+});
+
+// Abendrunde per Tastatur: Leertaste zeigt die Antwort, 1 = nicht gewusst, 2 oder Leertaste = gewusst
+document.addEventListener('keydown', (e) => {
+  if (location.hash !== '#/recap' || !recap?.queue.length || e.metaKey || e.ctrlKey || e.altKey) return;
+  const btn = (v) => app.querySelector(`[data-recap="${v}"]`);
+  if (!recap.revealed && (e.key === ' ' || e.key === 'Enter')) {
+    e.preventDefault();
+    app.querySelector('[data-reveal]')?.click();
+  } else if (recap.revealed && e.key === '1') btn(0)?.click();
+  else if (recap.revealed && (e.key === '2' || e.key === ' ' || e.key === 'Enter')) {
+    e.preventDefault();
+    btn(1)?.click();
   }
 });
 
@@ -1351,6 +1367,71 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'v' && app.querySelector('[data-speak]')) speakCard(S.cards[sorting.ids[sorting.index]]);
 });
 
+// ================= Abendrunde =================
+// Die heute im Tagesplan gelernten Karten noch einmal durchgehen. Die Planung der Karten bleibt unverändert;
+// nicht gewusste Karten kommen am Ende der Runde noch einmal.
+const isPlanFolderOrDeck = (id) => !!dailyCfg()?.enabled && [dailyCfg().folderId, dailyCfg().learnDeckId].includes(id);
+const recapCards = () => (dailyCfg()?.enabled && S.nodes[dailyCfg().learnDeckId] ? cardsOf(dailyCfg().learnDeckId).filter((c) => c.state !== 'new' && !c.suspended) : []);
+let recap = null;
+
+function viewRecap() {
+  if (!recap || recap.day !== dayKey()) {
+    const ids = recapCards().map((c) => c.id).sort(() => Math.random() - 0.5);
+    recap = { day: dayKey(), queue: ids, total: ids.length, known: 0, missed: new Set(), revealed: false };
+  }
+  const card = S.cards[recap.queue[0]];
+  const pct = recap.total ? (recap.known / recap.total) * 100 : 100;
+  const top = `
+    <header class="topbar study-top">
+      <a class="icon-btn" href="#/" data-exit aria-label="Beenden">${icon.close}</a>
+      <span class="counter">Abendrunde · <b>${recap.known}</b>/${recap.total}</span>
+      <span class="icon-btn"></span>
+    </header>
+    <div class="study-progress"><span style="width:${pct}%"></span></div>`;
+  if (!card) {
+    const missed = recap.missed.size;
+    app.innerHTML = `${top}
+      <main class="page study-done">
+        <div class="done-emoji">🌙</div>
+        <h2>Abendrunde geschafft</h2>
+        <p class="muted">${recap.total ? `${recap.total - missed} von ${recap.total} Karten auf Anhieb gewusst.` : 'Heute hast du im Tagesplan noch keine Karten gelernt.'}</p>
+        ${missed ? `<p class="muted">${missed} ${missed === 1 ? 'Karte kam' : 'Karten kamen'} noch einmal dran. Morgen fragt der Tagesplan sie wie geplant ab.</p>` : ''}
+        <a class="btn primary big" href="#/" data-exit>Zur Startseite</a>
+      </main>`;
+    app.querySelectorAll('[data-exit]').forEach((a) => a.addEventListener('click', () => (recap = null)));
+    return;
+  }
+  app.innerHTML = `${top}
+    <main class="study">
+      <article class="study-card">
+        <div class="card-content ${isLong(card.front) ? 'long' : ''}">${sanitize(card.front)}</div>
+        ${recap.revealed ? `<hr /><div class="card-content ${isLong(card.back) ? 'long' : ''}">${sanitize(card.back)}</div>` : ''}
+      </article>
+    </main>
+    <footer class="study-actions">
+      ${recap.revealed
+        ? `<div class="rate-row recap-row"><button class="rate again" data-recap="0">Nicht gewusst</button><button class="rate good" data-recap="1">Gewusst</button></div>`
+        : `<div class="reveal-row"><span class="kbd-hint">Leertaste</span><button class="reveal" data-reveal>Die Antwort anzeigen</button><span></span></div>`}
+    </footer>`;
+  app.querySelector('[data-exit]').addEventListener('click', () => (recap = null));
+  const show = () => {
+    recap.revealed = true;
+    viewRecap();
+  };
+  app.querySelector('[data-reveal]')?.addEventListener('click', show);
+  app.querySelector('.study-card').addEventListener('click', () => !recap.revealed && show());
+  app.querySelectorAll('[data-recap]').forEach((b) => (b.onclick = () => {
+    const id = recap.queue.shift();
+    if (b.dataset.recap === '1') recap.known++;
+    else {
+      recap.missed.add(id);
+      recap.queue.push(id); // am Ende noch einmal
+    }
+    recap.revealed = false;
+    viewRecap();
+  }));
+}
+
 // ================= Tagesplan-Agent =================
 /** Neue Karten einer Quelle heute: laut Vokabelplan oder feste Anzahl */
 const srcToday = (src, day = dayKey()) => (src.plan ? plannedOn(src.plan, day) : rateFor(src, day));
@@ -1378,7 +1459,7 @@ function viewDaily() {
         <h2>${esc(learn.name)}</h2>
         <p>${cardsOf(cfg.learnDeckId).length} Karten in „Lernen“ · ${deckCounts(cfg.reviewDeckId).due} Wiederholungen fällig</p>
         ${r ? `<p class="muted small">Letzter Lauf ${r.day.slice(8, 10)}.${r.day.slice(5, 7)}.: ${r.added} neu${r.fromPlan != null ? ` (${r.fromPlan} laut Plan, ${r.catchUp} nachgeholt)` : ''}, ${r.toReview} ins Wiederholen, ${r.back} zurück in den Vorrat${r.backlog ? ` · ${r.backlog} noch im Rückstand` : ''}${r.unmatched ? ` · ${r.unmatched} Plan-Karten nicht gefunden` : ''}</p>` : ''}
-        <div class="empty-actions"><a class="btn primary" href="#/study/${cfg.folderId}">Tagesplan lernen</a><button class="btn ghost" data-rerun>Heute neu zusammenstellen</button></div>
+        <div class="empty-actions"><a class="btn primary" href="#/study/${cfg.folderId}">Tagesplan lernen</a><button class="btn ghost" data-rerun>Heute neu zusammenstellen</button>${recapCards().length ? `<a class="btn ghost" href="#/recap">Abendrunde (${recapCards().length})</a>` : ''}</div>
       </section>` : ''}
 
       <div class="label-row"><h3 class="section-label">Vorrats-Decks und neue Karten pro Tag</h3><span class="muted small">heute ${todayTotal}</span></div>
@@ -1776,6 +1857,7 @@ function render() {
   else if (view === 'sort') viewSort(id);
   else if (view === 'quick') viewQuick();
   else if (view === 'daily') viewDaily();
+  else if (view === 'recap') viewRecap();
   else viewHome();
   if (route !== lastRoute) {
     window.scrollTo(0, 0);

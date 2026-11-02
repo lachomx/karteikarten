@@ -1,5 +1,5 @@
 // Offline-Unterstützung: erst Netzwerk, bei fehlender Verbindung aus dem Cache.
-const CACHE = 'karteikarten-v19';
+const CACHE = 'karteikarten-v20';
 const SHELL = ['./', 'index.html', 'styles.css', 'js/app.js', 'js/store.js', 'js/scheduler.js', 'js/ui.js', 'js/importer.js', 'js/sync.js', 'js/audio.js', 'js/daily.js', 'vokabelplan.json', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', (e) => {

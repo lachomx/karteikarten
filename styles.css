@@ -609,3 +609,4 @@ mark {
 .daily-src .input.num { width: 72px; flex: none; }
 .daily-src .input.num:disabled { opacity: .4; }
 .plan-badge { min-width: 44px; height: 36px; padding: 0 10px; border-radius: 10px; background: var(--primary-soft); color: var(--primary); font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.recap-row { grid-template-columns: repeat(2, 1fr); }
