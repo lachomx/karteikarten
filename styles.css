@@ -610,3 +610,12 @@ mark {
 .daily-src .input.num:disabled { opacity: .4; }
 .plan-badge { min-width: 44px; height: 36px; padding: 0 10px; border-radius: 10px; background: var(--primary-soft); color: var(--primary); font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .recap-row { grid-template-columns: repeat(2, 1fr); }
+
+/* ---------- Tagesplan: Zusatzeinträge und Vorlesen ---------- */
+.plan-extras { margin-bottom: 14px; }
+.read-list { margin: 0; padding: 0 0 0 24px; display: flex; flex-direction: column; gap: 10px; }
+.read-list li { position: relative; background: var(--surface); border-radius: 18px; padding: 14px 52px 14px 14px; }
+.read-list li::marker { color: var(--muted); }
+.read-list .read-ko { font-size: 19px; }
+.read-list .read-de { font-size: 14px; margin-top: 4px; }
+.read-list [data-say] { position: absolute; top: 10px; right: 8px; }

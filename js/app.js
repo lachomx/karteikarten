@@ -334,6 +334,7 @@ function viewFolder(id) {
       <button class="icon-btn" data-menu aria-label="Menü">${icon.more}</button>
     </header>
     <main class="page">
+      ${isPlanFolderOrDeck(id) ? planExtras() : ''}
       ${kids.length > 1 ? `<div class="label-row end">${sortChip()}</div>` : ''}
       ${kids.length
         ? kids.map((k) => `<section class="tree-block">${treeRow(k, 0)}</section>`).join('')
@@ -1374,6 +1375,53 @@ const isPlanFolderOrDeck = (id) => !!dailyCfg()?.enabled && [dailyCfg().folderId
 const recapCards = () => (dailyCfg()?.enabled && S.nodes[dailyCfg().learnDeckId] ? cardsOf(dailyCfg().learnDeckId).filter((c) => c.state !== 'new' && !c.suspended) : []);
 let recap = null;
 
+/** Zusätzliche Einträge im Ordner „Tagesplan“ */
+function planExtras() {
+  const n = recapCards().length;
+  const v = readAloudCards().length;
+  const row = (href, ic, cls, title, sub) =>
+    `<a class="row-card" href="${href}"><span class="node-icon ${cls}">${ic}</span><span class="row-main"><span class="row-title">${title}</span><span class="row-sub">${sub}</span></span><span class="chev">${icon.chevron}</span></a>`;
+  return `<div class="stack plan-extras">
+    ${row('#/recap', icon.moon, 'c-purple', 'Abendrunde', n ? `Heute ${n} gelernte Karten noch einmal` : 'Erst nach dem Lernen im Tagesplan')}
+    ${v ? row('#/vorlesen', icon.speaker, 'c-orange', 'Vorlesen', `${v} Sätze laut lesen`) : ''}
+  </div>`;
+}
+
+// ================= Vorlesen =================
+// 10 Sätze aus den Sprech-Decks (Familie, Freunde): zuerst die von heute, dann schon gelernte (je Tag gemischt),
+// zuletzt die nächsten aus dem Vorrat.
+const READ_COUNT = 10;
+function readAloudCards() {
+  const cfg = dailyCfg();
+  if (!cfg?.enabled) return [];
+  const speakDecks = new Set(cfg.sources.filter((s) => ['03', '04'].includes(s.plan)).map((s) => s.deckId));
+  if (!speakDecks.size) return [];
+  const fromSpeak = (c) => !c.suspended && (speakDecks.has(c.deckId) || speakDecks.has(c.origin));
+  const all = Object.values(S.cards).filter(fromSpeak);
+  const today = all.filter((c) => c.deckId === cfg.learnDeckId);
+  const seed = Number(dayKey().replace(/-/g, ''));
+  const hash = (id) => [...id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0) + seed) % 1000003, seed);
+  const learned = all.filter((c) => c.deckId === cfg.reviewDeckId).sort((a, b) => hash(a.id) - hash(b.id));
+  const upcoming = all.filter((c) => speakDecks.has(c.deckId) && c.state === 'new').sort((a, b) => a.createdAt - b.createdAt);
+  return [...today, ...learned, ...upcoming].slice(0, READ_COUNT);
+}
+
+function viewReadAloud() {
+  const cards = readAloudCards();
+  app.innerHTML = `
+    <header class="topbar"><a class="icon-btn" href="${nodeHref(dailyCfg()?.folderId)}" aria-label="Zurück">${icon.back}</a><h1>Vorlesen</h1><span class="icon-btn"></span></header>
+    <main class="page with-tabbar">
+      <p class="page-sub">Lies jeden Satz laut und deutlich. Tippe auf den Lautsprecher, wenn du die Aussprache hören willst.</p>
+      ${cards.length ? `<ol class="read-list">${cards.map((c) => {
+        const side = koreanSide(c) ?? 'front';
+        const other = side === 'front' ? 'back' : 'front';
+        return `<li><div class="read-ko">${sanitize(c[side])}</div><div class="read-de muted">${sanitize(c[other])}</div><button class="icon-btn small" data-say="${c.id}" aria-label="Vorlesen">${icon.speaker}</button></li>`;
+      }).join('')}</ol>` : '<div class="empty"><p>Wähle im Tagesplan die Sprech-Decks (Familie, Freunde) aus, dann erscheinen hier die Sätze.</p></div>'}
+    </main>
+    ${tabbar('home')}`;
+  app.querySelectorAll('[data-say]').forEach((b) => (b.onclick = () => speakCard(S.cards[b.dataset.say])));
+}
+
 function viewRecap() {
   if (!recap || recap.day !== dayKey()) {
     const ids = recapCards().map((c) => c.id).sort(() => Math.random() - 0.5);
@@ -1858,6 +1906,7 @@ function render() {
   else if (view === 'quick') viewQuick();
   else if (view === 'daily') viewDaily();
   else if (view === 'recap') viewRecap();
+  else if (view === 'vorlesen') viewReadAloud();
   else viewHome();
   if (route !== lastRoute) {
     window.scrollTo(0, 0);
