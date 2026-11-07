@@ -5,7 +5,7 @@
 // Decks 00–07 folgen dem festen Vokabelplan (vokabelplan.json, derselbe wie in der Lernplan-App): Er legt für jeden Tag
 // fest, welche Karten neu dazukommen. Erkannt werden die Karten am Text ihrer Vorderseite. Andere Decks (z. B. 08 Eigene
 // Sätze) liefern eine feste Anzahl pro Tag in der Reihenfolge, in der sie angelegt wurden.
-import { S, createNode, cardsOf, createCard, settingsChanged, save } from './store.js';
+import { S, createNode, cardsOf, createCard, children, settingsChanged, save } from './store.js';
 import { dayKey } from './scheduler.js';
 
 // Mengen für Decks ohne Vokabelplan (Anzeige und Vorgabe), erkannt an der Nummer am Anfang des Decknamens
@@ -24,6 +24,8 @@ const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
 const ACTIVE_PER_DAY = 5; // neue Karten Deutsch → Koreanisch pro Tag
 const ACTIVE_MIN_IVL = 7; // erst ab dieser Intervall-Stufe (Tage) kommt eine Karte in die Gegenrichtung
 const MAX_NEW = 60; // höchstens so viele neue Karten pro Tag, wenn verpasste Tage nachgeholt werden
+// Version des Agenten: Ein Lauf von heute mit älterer Version wird einmal neu zusammengestellt (Fehlerkorrektur 07.11.2026)
+const AGENT_VERSION = 2;
 
 // ---------- Vokabelplan ----------
 let plan = null; // { '01': Map(Schlüssel → { date, nr }) }, ... }
@@ -87,11 +89,55 @@ export function defaultCfg() {
   return { enabled: false, maxNew: MAX_NEW, activePerDay: ACTIVE_PER_DAY, folderId: null, learnDeckId: null, reviewDeckId: null, sources: [], pause: [], lastRun: null, lastResult: null };
 }
 
-/** Ordner „Tagesplan“ mit den Decks „Lernen“ und „Wiederholen“ anlegen, falls sie fehlen */
+const isPlanFolder = (n) => n.type === 'folder' && !n.parentId && /^\s*tagesplan\s*$/i.test(n.name);
+const isLearnName = (n) => n.type === 'deck' && /^\s*lernen\b/i.test(n.name);
+const isReviewName = (n) => n.type === 'deck' && /^\s*wiederholen\b/i.test(n.name);
+
+/**
+ * Genau einen Ordner „Tagesplan“ mit je einem Deck „Lernen“ und „Wiederholen“ sicherstellen.
+ * Gibt es (z. B. durch einen Lauf vor dem ersten Abgleich auf einem zweiten Gerät) mehrere Tagesplan-Ordner,
+ * werden sie zusammengeführt: Karten aus weiteren „Lernen“-/„Wiederholen“-Decks wandern in die Haupt-Decks,
+ * andere Decks ziehen in den Hauptordner, die leeren Doppel werden gelöscht. Gibt die Zahl der zusammengeführten Knoten zurück.
+ */
 function ensureDecks(cfg) {
-  if (!S.nodes[cfg.folderId]) cfg.folderId = createNode('folder', 'Tagesplan', null).id;
-  if (!S.nodes[cfg.learnDeckId]) cfg.learnDeckId = createNode('deck', 'Lernen', cfg.folderId).id;
-  if (!S.nodes[cfg.reviewDeckId]) cfg.reviewDeckId = createNode('deck', 'Wiederholen', cfg.folderId).id;
+  const folders = Object.values(S.nodes).filter(isPlanFolder).sort((a, b) => a.createdAt - b.createdAt);
+  // Hauptordner: der Ordner, in dem das eingestellte Deck „Lernen“ liegt, sonst der eingestellte, sonst der älteste
+  const learnParent = S.nodes[S.nodes[cfg.learnDeckId]?.parentId];
+  const main = (learnParent && isPlanFolder(learnParent) ? learnParent : null) ?? (S.nodes[cfg.folderId]?.type === 'folder' ? S.nodes[cfg.folderId] : null) ?? folders[0] ?? createNode('folder', 'Tagesplan', null);
+  cfg.folderId = main.id;
+  const inPlan = (n) => n && (n.parentId === main.id || folders.some((f) => f.id === n.parentId));
+  if (!inPlan(S.nodes[cfg.learnDeckId])) cfg.learnDeckId = (children(main.id).find(isLearnName) ?? folders.flatMap((f) => children(f.id)).find(isLearnName) ?? createNode('deck', 'Lernen', main.id)).id;
+  if (!inPlan(S.nodes[cfg.reviewDeckId])) cfg.reviewDeckId = (children(main.id).find(isReviewName) ?? folders.flatMap((f) => children(f.id)).find(isReviewName) ?? createNode('deck', 'Wiederholen', main.id)).id;
+  let merged = 0;
+  const reparent = (n) => {
+    if (n.parentId === main.id) return;
+    n.parentId = main.id;
+    n.updatedAt = Date.now();
+    merged++;
+  };
+  reparent(S.nodes[cfg.learnDeckId]);
+  reparent(S.nodes[cfg.reviewDeckId]);
+  for (const f of folders) {
+    for (const n of children(f.id)) {
+      if (n.id === cfg.learnDeckId || n.id === cfg.reviewDeckId) continue;
+      const target = isLearnName(n) ? cfg.learnDeckId : isReviewName(n) ? cfg.reviewDeckId : null;
+      if (!target) {
+        if (f.id !== main.id) reparent(n);
+        continue;
+      }
+      for (const c of cardsOf(n.id)) move(c, target);
+      if (!children(n.id).length) {
+        delete S.nodes[n.id];
+        merged++;
+      } else reparent(n);
+    }
+    if (f.id !== main.id && !children(f.id).length && !cardsOf(f.id).length) {
+      delete S.nodes[f.id];
+      merged++;
+    }
+  }
+  if (merged) save();
+  return merged;
 }
 
 function move(card, deckId, extra = {}) {
@@ -127,9 +173,18 @@ function addActiveCards(cfg) {
  */
 export function runDaily({ force = false, day = dayKey() } = {}) {
   const cfg = dailyCfg();
-  if (!cfg?.enabled || (cfg.lastRun >= day && !force)) return null; // >=: auch bei falsch gestellter Uhr nicht rückwärts umstellen
-  ensureDecks(cfg);
-  const res = { day, toReview: 0, back: 0, added: 0, bySource: {} };
+  if (!cfg?.enabled) return null;
+  // Daten noch nicht vollständig da (Vokabelplan nicht geladen oder Vorrats-Decks fehlen): nicht umstellen, später erneut versuchen
+  if (cfg.sources.some((s) => s.plan) && !plan) return null;
+  if (cfg.sources.length && !cfg.sources.some((s) => S.nodes[s.deckId])) return null;
+  const merged = ensureDecks(cfg);
+  // Heute schon gelaufen: nur neu zusammenstellen, wenn doppelte Ordner zusammengeführt wurden oder der Lauf von einer fehlerhaften Version stammt
+  const redo = cfg.lastRun === day && (merged > 0 || (cfg.version ?? 1) < AGENT_VERSION);
+  if (cfg.lastRun >= day && !force && !redo) { // >=: auch bei falsch gestellter Uhr nicht rückwärts umstellen
+    if (merged) saveCfg(cfg);
+    return null;
+  }
+  const res = { day, toReview: 0, back: 0, added: 0, bySource: {}, merged, redo };
 
   // 1. Karten aus „Lernen“: gelernte → Wiederholen, nicht angefangene → zurück ins Ursprungsdeck
   for (const c of cardsOf(cfg.learnDeckId)) {
@@ -207,6 +262,7 @@ export function runDaily({ force = false, day = dayKey() } = {}) {
   learn.name = `Lernen · ${WD[d.getDay()]} ${day.slice(8, 10)}.${day.slice(5, 7)}.`;
   learn.updatedAt = Date.now();
   cfg.lastRun = day;
+  cfg.version = AGENT_VERSION;
   cfg.lastResult = res;
   saveCfg(cfg);
   save();

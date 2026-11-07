@@ -5,7 +5,7 @@ import {
 } from './store.js';
 import { audioPrefs, audioFileCount, ttsSupported, recordSupported, koreanVoice, koreanSide, speechText, speak, stop as stopAudio, prepareAudio, playCard, playUrl, startRecording } from './audio.js';
 import { initSync, onStatus, getStatus, signIn, signUp, signOut, syncNow } from './sync.js';
-import { schedule, planOf, newCardFields, formatInterval, category, endOfDay, startOfDay, dayKey, statusFields, STATUSES, DAY } from './scheduler.js';
+import { schedule, planOf, newCardFields, formatInterval, category, endOfDay, startOfDay, dayKey, statusFields, STATUSES, DAY, MIN } from './scheduler.js';
 import { SEPARATORS, parseImport, parseTags, fieldToHtml } from './importer.js';
 import { dailyCfg, defaultCfg, saveCfg, runDaily, rateFor, tagFor, planRatesFor, poolLeft, isPoolDeck, isLearnDeck, isPlanDeck, loadPlan, plannedOn, planNoFor } from './daily.js';
 import { icon, esc, sanitize, plainText, isEmptyHtml, menu, prompt, confirm, toast, readImage, openSheet, TEXT_COLORS } from './ui.js';
@@ -22,27 +22,31 @@ const hasTag = (card, tag) => !tag || (card.tags ?? []).includes(tag);
 function ownCounts(deckId, tag = null, now = Date.now()) {
   const eod = endOfDay(now);
   const cat = { new: 0, learning: 0, mastered: 0, known: 0 };
-  let newCount = 0, learn = 0, review = 0, total = 0;
+  let newCount = 0, learn = 0, review = 0, total = 0, next = null;
   for (const c of cardsOf(deckId)) {
     if (!hasTag(c, tag)) continue;
     total++;
     cat[category(c)]++;
     if (c.suspended) continue;
     if (c.state === 'new') newCount++;
-    else if (c.due <= eod) c.state === 'review' ? review++ : learn++;
+    else if (c.state === 'review') c.due <= eod && review++;
+    // Lernkarten erst, wenn ihre Wartezeit (z. B. 8 Min) wirklich abgelaufen ist
+    else if (c.due <= now) learn++;
+    else if (c.due <= eod && (next == null || c.due < next)) next = c.due;
   }
   // Tagesplan: Vorrats-Decks geben keine neuen Karten direkt aus, im Deck „Lernen“ gilt kein Tageslimit
   const limit = isPoolDeck(deckId) ? 0 : isLearnDeck(deckId) ? Infinity : S.settings.newPerDay - newIntroducedToday(deckId);
   const newAvail = Math.max(0, Math.min(newCount, limit));
-  return { newAvail, learn, review, due: newAvail + learn + review, cat, total };
+  return { newAvail, learn, review, due: newAvail + learn + review, cat, total, next };
 }
 
 /** Zählung über alle Decks unterhalb eines Ordners bzw. über ein Deck samt Unterdecks */
 function nodeCounts(id, tag = null) {
-  const sum = { newAvail: 0, learn: 0, review: 0, due: 0, total: 0, cat: { new: 0, learning: 0, mastered: 0, known: 0 } };
+  const sum = { newAvail: 0, learn: 0, review: 0, due: 0, total: 0, next: null, cat: { new: 0, learning: 0, mastered: 0, known: 0 } };
   for (const d of decksIn(id)) {
     const c = ownCounts(d.id, tag);
     for (const k of ['newAvail', 'learn', 'review', 'due', 'total']) sum[k] += c[k];
+    if (c.next != null && (sum.next == null || c.next < sum.next)) sum.next = c.next;
     for (const k in sum.cat) sum.cat[k] += c.cat[k];
   }
   return sum;
@@ -68,9 +72,12 @@ function tagCounts(cards) {
 const studyHref = (deckId, tag) => `#/study/${deckId}${tag ? `/${encodeURIComponent(tag)}` : ''}`;
 const tagChips = (tags) => (tags?.length ? `<div class="card-tags">${tags.map((t) => `<span>#${esc(t)}</span>`).join('')}</div>` : '');
 
+const clockTime = (t) => new Date(t).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+
 /** Statuszeile unter Ordnern und Decks (HTML) */
 function subLabel(c) {
   if (!c.total) return 'Noch keine Karten hinzugefügt';
+  if (!c.due && c.next) return `${icon.clock}Nächste Karte um ${clockTime(c.next)}`;
   if (!c.due) return `<span class="done-label">Heute abgeschlossen ${icon.checkCircle}</span>`;
   return `${icon.clock}Heute ${c.due} ${c.due === 1 ? 'Karte' : 'Karten'} lernen`;
 }
@@ -931,9 +938,13 @@ function nextCard() {
   if (review) return review;
   const fresh = cards.find((c) => c.state === 'new');
   if (fresh) return fresh;
-  // Nur noch Lernkarten, die erst in ein paar Minuten fällig wären: vorziehen
-  return cards.filter(isLearning).sort((a, b) => a.due - b.due)[0] ?? null;
+  // Lernkarten, deren Wartezeit noch läuft, werden nicht vorgezogen – auch wenn sonst nichts mehr da ist
+  return null;
 }
+
+/** Nächste Lernkarte der Sitzung, die noch wartet (für die Anzeige „Nächste Karte um …“) */
+const nextWaiting = () => session.ids.map((id) => S.cards[id]).filter((c) => c && isLearning(c)).sort((a, b) => a.due - b.due)[0] ?? null;
+let waitTimer = null;
 
 function answer(rating) {
   const card = session.current;
@@ -971,6 +982,7 @@ function undo() {
 
 function viewStudy(deckId, tag = null) {
   if (!S.nodes[deckId] && deckId !== ALL) return go('#/');
+  clearTimeout(waitTimer);
   if (!session || session.deckId !== deckId || session.tag !== tag || session.startedDay !== dayKey()) startSession(deckId, tag);
   const exitHref = deckId === ALL ? '#/stats' : `#/deck/${deckId}`;
   if (session.current && !S.cards[session.current.id]) session.current = null; // währenddessen gelöscht
@@ -986,6 +998,23 @@ function viewStudy(deckId, tag = null) {
       <button class="icon-btn" data-menu aria-label="Menü" ${card ? '' : 'disabled'}>${icon.more}</button>
     </header>
     <div class="study-progress"><span style="width:${pct}%"></span></div>`;
+
+  const waiting = card ? null : nextWaiting();
+  if (waiting) {
+    const mins = Math.max(1, Math.ceil((waiting.due - Date.now()) / MIN));
+    const route = location.hash;
+    app.innerHTML = `${top}
+      <main class="page study-done">
+        <div class="done-emoji">⏳</div>
+        <h2>Gerade nichts fällig</h2>
+        <p class="muted">${session.ids.length === 1 ? 'Eine Karte wartet' : `${session.ids.length} Karten warten`} noch auf ihre Wiederholung. Die nächste kommt um <b>${clockTime(waiting.due)}</b> (in ${mins} Min).</p>
+        <a class="btn primary big" href="${exitHref}" data-exit>${deckId === ALL ? 'Zurück zur Statistik' : 'Zurück zum Deck'}</a>
+      </main>`;
+    app.querySelectorAll('[data-exit]').forEach((a) => a.addEventListener('click', () => (session = null)));
+    // Sobald die Karte fällig ist, geht es hier automatisch weiter
+    waitTimer = setTimeout(() => location.hash === route && viewStudy(deckId, tag), Math.min(waiting.due - Date.now() + 500, 60 * MIN));
+    return;
+  }
 
   if (!card) {
     const s = streak();
@@ -1599,6 +1628,12 @@ function viewDaily() {
     // „Ab morgen“: heute nur aufräumen, keine neuen Karten
     if (start === 'tomorrow') cfg.pause = [...(cfg.pause ?? []), today];
     const res = runDaily({ force: true });
+    if (!res) {
+      e.target.checked = false;
+      cfg.enabled = false;
+      saveCfg(cfg);
+      return toast('Daten noch nicht vollständig geladen – bitte gleich noch einmal versuchen');
+    }
     if (start === 'tomorrow') cfg.pause = cfg.pause.filter((d) => d !== today);
     saveCfg(cfg);
     session = null;
@@ -1608,6 +1643,7 @@ function viewDaily() {
   app.querySelector('[data-rerun]')?.addEventListener('click', async () => {
     if (!(await confirm('Heute neu zusammenstellen?', 'Nicht angefangene Karten gehen zurück in ihr Deck, dann werden die neuen Karten mit den aktuellen Mengen neu geholt. Schon gelernte bleiben erhalten (im Deck „Wiederholen“).', 'Neu zusammenstellen'))) return;
     const res = runDaily({ force: true });
+    if (!res) return toast('Daten noch nicht vollständig geladen – bitte gleich noch einmal versuchen');
     session = null;
     toast(`${res.added} neue Karten in „Lernen“`);
     viewDaily();
@@ -1936,14 +1972,20 @@ const ready = isTestDb ? planReady : initSync(() => {
 // Tagesplan: erst nach dem ersten Abgleich, damit zwei Geräte nicht unabhängig voneinander umstellen
 function dailyTick() {
   if (/^#\/(add|edit|import|quick|sort|study)\b/.test(location.hash)) return;
+  // Angemeldet, aber noch kein erfolgreicher Abgleich in dieser Sitzung: nicht mit veraltetem Stand umstellen
+  const st = getStatus();
+  if (st.email && !st.lastSync) return;
   const res = runDaily();
   if (res) {
     session = null;
-    toast(`Tagesplan: ${res.added} neue Karten in „Lernen“`);
+    toast(`Tagesplan: ${res.added} neue Karten in „Lernen“${res.merged ? ' · doppelte Tagesplan-Ordner zusammengeführt' : ''}`);
     render();
   }
 }
 ready.catch(() => {}).finally(dailyTick);
+onStatus((st) => st.state === 'idle' && st.lastSync && ready.finally(dailyTick));
+// Zurück in der App: Anzeigen wie „Nächste Karte um …“ aktualisieren
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && /^(#\/?|#\/(folder|deck)\/[^/]+)?$/.test(location.hash) && render());
 document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && ready.finally(dailyTick));
 window.addEventListener('hashchange', () => ready.finally(dailyTick));
 

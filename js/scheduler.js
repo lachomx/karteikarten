@@ -11,8 +11,15 @@ export function startOfDay(t = Date.now()) {
   return d.getTime();
 }
 
+/** Mitternacht (0 Uhr) n Kalendertage nach dem Tag von t – auch über Zeitumstellungen hinweg genau 0 Uhr */
+export function addDays(t, n) {
+  const d = new Date(startOfDay(t));
+  d.setDate(d.getDate() + n);
+  return d.getTime();
+}
+
 export function endOfDay(t = Date.now()) {
-  return startOfDay(t) + DAY - 1;
+  return addDays(t, 1) - 1;
 }
 
 export function dayKey(t = Date.now()) {
@@ -42,7 +49,7 @@ function toReview(c, level, s, now, goods = 0) {
   c.goods = goods;
   c.level = Math.min(Math.max(level, 0), s.levels.length - 1);
   c.ivl = Math.min(MAX_IVL, s.levels[c.level]);
-  c.due = startOfDay(now) + c.ivl * DAY;
+  c.due = addDays(now, c.ivl); // „1 Tag“ heißt: ab 0 Uhr des nächsten Tages wieder abfragbar, nicht erst nach 24 Stunden
   return c;
 }
 
@@ -146,7 +153,7 @@ export function statusFields(status, s, now = Date.now()) {
   if (status === 'bekannt') return { ...newCardFields(), suspended: true };
   if (status === 'eingeschlafen') {
     const ivl = Math.random() < 0.5 ? 3 : 4;
-    return { ...newCardFields(), state: 'review', ivl, level: levelFor(ivl, s.levels), due: startOfDay(now) + ivl * DAY, suspended: false };
+    return { ...newCardFields(), state: 'review', ivl, level: levelFor(ivl, s.levels), due: addDays(now, ivl), suspended: false };
   }
   return { ...newCardFields(), suspended: false };
 }
