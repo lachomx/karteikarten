@@ -2,7 +2,7 @@
 // Prinzip: Jeder Ordner, jedes Deck und jede Karte ist eine Zeile in der Tabelle „items“.
 // Hochgeladen wird, was sich seit dem letzten Abgleich lokal geändert hat (Vergleich über updatedAt);
 // heruntergeladen wird, was der Server seit dem letzten Abruf neu hat. Bei Konflikten gewinnt die neuere Änderung.
-import { S, save, onSave, deviceId, getAudio, putAudio } from './store.js';
+import { S, save, onSave, deviceId, getAudio, putAudio, isTestDb } from './store.js';
 
 const SUPABASE_URL = 'https://pjearscszkvvbxipgrkm.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_KcXfeuzOgTd4HpSuHsF5EA_QgDJMV8H';
@@ -41,6 +41,7 @@ async function getClient() {
 
 // ---------- Anmeldung ----------
 export async function initSync(onRemoteChange) {
+  if (isTestDb) return;
   remoteChanged = onRemoteChange;
   onSave(() => {
     if (!applyingRemote && user) schedule(4000);
@@ -62,6 +63,8 @@ export async function initSync(onRemoteChange) {
 let remoteChanged = () => {};
 
 export async function signIn(email, password) {
+  // Test-Datenbank (?db=…): nie mit dem echten Konto abgleichen, sonst landen Testdaten im echten Bestand
+  if (isTestDb) throw new Error('Im Test-Modus (?db=…) ist keine Anmeldung möglich.');
   const sb = await getClient();
   const { data, error } = await sb.auth.signInWithPassword({ email, password });
   if (error) throw new Error(translate(error.message));
@@ -71,6 +74,7 @@ export async function signIn(email, password) {
 }
 
 export async function signUp(email, password) {
+  if (isTestDb) throw new Error('Im Test-Modus (?db=…) ist keine Anmeldung möglich.');
   const sb = await getClient();
   const { data, error } = await sb.auth.signUp({
     email,
@@ -111,7 +115,7 @@ function schedule(ms) {
 }
 
 export async function syncNow() {
-  if (!user) return;
+  if (!user || isTestDb) return;
   if (running) {
     again = true;
     return running;
