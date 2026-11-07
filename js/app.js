@@ -1507,7 +1507,7 @@ function viewDaily() {
       <section class="hero daily-hero">
         <h2>${esc(learn.name)}</h2>
         <p>${cardsOf(cfg.learnDeckId).length} Karten in „Lernen“ · ${deckCounts(cfg.reviewDeckId).due} Wiederholungen fällig</p>
-        ${r ? `<p class="muted small">Letzter Lauf ${r.day.slice(8, 10)}.${r.day.slice(5, 7)}.: ${r.added} neu${r.fromPlan != null ? ` (${r.fromPlan} laut Plan, ${r.catchUp} nachgeholt)` : ''}, ${r.toReview} ins Wiederholen, ${r.back} zurück in den Vorrat${r.backlog ? ` · ${r.backlog} noch im Rückstand` : ''}${r.unmatched ? ` · ${r.unmatched} Plan-Karten nicht gefunden` : ''}</p>` : ''}
+        ${r ? `<p class="muted small">Letzter Lauf ${r.day.slice(8, 10)}.${r.day.slice(5, 7)}.: ${r.added} neu${r.fromPlan != null ? ` (${r.fromPlan} laut Plan, ${r.catchUp} nachgeholt)` : ''}${r.active ? `, ${r.active} aktiv (DE → KO)` : ''}, ${r.toReview} ins Wiederholen, ${r.back} zurück in den Vorrat${r.backlog ? ` · ${r.backlog} noch im Rückstand` : ''}${r.unmatched ? ` · ${r.unmatched} Plan-Karten nicht gefunden` : ''}</p>` : ''}
         <div class="empty-actions"><a class="btn primary" href="#/study/${cfg.folderId}">Tagesplan lernen</a><button class="btn ghost" data-rerun>Heute neu zusammenstellen</button>${recapCards().length ? `<a class="btn ghost" href="#/recap">Abendrunde (${recapCards().length})</a>` : ''}</div>
       </section>` : ''}
 
@@ -1529,6 +1529,7 @@ function viewDaily() {
       <button class="link-btn" data-plan>Vokabelplan für die Decks 00–07 verwenden</button>
       <p class="muted small">Decks 00–07 folgen dem Vokabelplan aus deiner Lernplan-App: Er legt für jeden Tag bis zur Korea-Reise fest, welche Karten neu dazukommen, auch an Feiertagen. Andere Decks liefern die eingetragene Anzahl pro Tag.</p>
       <div class="settings">
+        <label class="set-row"><span>Aktiver Abruf pro Tag<small>Neue Karten Deutsch → Koreanisch aus Deck 0, sobald ein Wort die 7-Tage-Stufe erreicht hat. Häufigste zuerst, Tag #aktiv. 0 = aus.</small></span><input class="input num" type="number" min="0" max="50" data-active value="${cfg.activePerDay ?? 5}" /></label>
         <label class="set-row"><span>Höchstens neue Karten pro Tag<small>Gilt nur, wenn verpasste Tage nachgeholt werden. Der Rest kommt an den Folgetagen.</small></span><input class="input num" type="number" min="10" max="300" data-max value="${cfg.maxNew ?? 60}" /></label>
       </div>
     </main>
@@ -1564,6 +1565,11 @@ function viewDaily() {
     store();
     toast(n ? `Vokabelplan für ${n} Decks aktiv` : 'Kein ausgewähltes Deck mit Nummer 00–07');
     viewDaily();
+  };
+  app.querySelector('[data-active]').onchange = (e) => {
+    cfg.activePerDay = Math.max(0, parseInt(e.target.value, 10) || 0);
+    store();
+    toast('Gespeichert');
   };
   app.querySelector('[data-max]').onchange = (e) => {
     cfg.maxNew = Math.max(10, parseInt(e.target.value, 10) || 60);

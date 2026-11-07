@@ -24,8 +24,9 @@ function audioKey(text) {
   return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0');
 }
 const fileUrl = (card) => {
-  const k = audioKey(planKey(card.front));
-  return audioIndex.has(k) ? AUDIO_BASE + k + '.m4a' : null;
+  // Umgedrehte Karten (Deutsch → Koreanisch): die Datei gehört zur ursprünglichen Vorderseite, jetzt die Rückseite
+  const k = [card.front, card.back].map((side) => audioKey(planKey(side))).find((key) => audioIndex.has(key));
+  return k ? AUDIO_BASE + k + '.m4a' : null;
 };
 
 const HANGUL = /[ᄀ-ᇿ㄰-㆏가-힯]/;

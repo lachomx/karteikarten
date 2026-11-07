@@ -5,7 +5,7 @@
 // Decks 00–07 folgen dem festen Vokabelplan (vokabelplan.json, derselbe wie in der Lernplan-App): Er legt für jeden Tag
 // fest, welche Karten neu dazukommen. Erkannt werden die Karten am Text ihrer Vorderseite. Andere Decks (z. B. 08 Eigene
 // Sätze) liefern eine feste Anzahl pro Tag in der Reihenfolge, in der sie angelegt wurden.
-import { S, createNode, cardsOf, settingsChanged, save } from './store.js';
+import { S, createNode, cardsOf, createCard, settingsChanged, save } from './store.js';
 import { dayKey } from './scheduler.js';
 
 // Mengen für Decks ohne Vokabelplan (Anzeige und Vorgabe), erkannt an der Nummer am Anfang des Decknamens
@@ -21,6 +21,8 @@ const PLAN_RATES = {
 };
 
 const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+const ACTIVE_PER_DAY = 5; // neue Karten Deutsch → Koreanisch pro Tag
+const ACTIVE_MIN_IVL = 7; // erst ab dieser Intervall-Stufe (Tage) kommt eine Karte in die Gegenrichtung
 const MAX_NEW = 60; // höchstens so viele neue Karten pro Tag, wenn verpasste Tage nachgeholt werden
 
 // ---------- Vokabelplan ----------
@@ -82,7 +84,7 @@ export function saveCfg(cfg) {
 }
 
 export function defaultCfg() {
-  return { enabled: false, maxNew: MAX_NEW, folderId: null, learnDeckId: null, reviewDeckId: null, sources: [], pause: [], lastRun: null, lastResult: null };
+  return { enabled: false, maxNew: MAX_NEW, activePerDay: ACTIVE_PER_DAY, folderId: null, learnDeckId: null, reviewDeckId: null, sources: [], pause: [], lastRun: null, lastResult: null };
 }
 
 /** Ordner „Tagesplan“ mit den Decks „Lernen“ und „Wiederholen“ anlegen, falls sie fehlen */
@@ -97,6 +99,27 @@ function move(card, deckId, extra = {}) {
 }
 const withTag = (card, tag) => (tag && !(card.tags ?? []).includes(tag) ? [...(card.tags ?? []), tag] : card.tags ?? []);
 
+/** Deutsche Seite als Frage: Hinweise in Klammern mit koreanischem Text würden die Antwort verraten */
+const withoutKoreanHints = (html) => html.replace(/\s*\([^()]*[가-힯ㄱ-ㅎㅏ-ㅣ][^()]*\)/g, '');
+
+/** Legt für sichere Karten aus Deck 00 die Gegenrichtung an. Die feste id verhindert Doppelte, wenn zwei Geräte umstellen. */
+function addActiveCards(cfg) {
+  const src = cfg.sources.find((s) => s.plan === '00');
+  if (!src) return 0;
+  const waiting = cardsOf(cfg.learnDeckId).filter((c) => c.activeOf && c.state === 'new').length;
+  const room = Math.max(0, (cfg.activePerDay ?? ACTIVE_PER_DAY) - waiting);
+  const ready = Object.values(S.cards)
+    .filter((c) => c.origin === src.deckId && !c.activeOf && !c.activeDone && !c.suspended && c.state === 'review' && c.ivl >= ACTIVE_MIN_IVL && !S.cards[`aktiv-${c.id}`])
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(0, room);
+  for (const c of ready) {
+    createCard(cfg.learnDeckId, withoutKoreanHints(c.back), c.front, { id: `aktiv-${c.id}`, activeOf: c.id, tags: withTag(c, 'aktiv') });
+    c.activeDone = true;
+    c.updatedAt = Date.now();
+  }
+  return ready.length;
+}
+
 /**
  * Tageswechsel ausführen. Läuft einmal pro Tag; mit force wird der heutige Tag neu zusammengestellt
  * (schon gelernte Karten bleiben dabei erhalten und kommen ins Wiederholen-Deck).
@@ -110,6 +133,7 @@ export function runDaily({ force = false, day = dayKey() } = {}) {
 
   // 1. Karten aus „Lernen“: gelernte → Wiederholen, nicht angefangene → zurück ins Ursprungsdeck
   for (const c of cardsOf(cfg.learnDeckId)) {
+    if (c.activeOf && c.state === 'new') continue; // Gegenrichtung: wartet im Deck „Lernen“, zählt aufs Tagesmaß
     if (c.state === 'new' && S.nodes[c.origin]) {
       move(c, c.origin);
       res.back++;
@@ -174,6 +198,9 @@ export function runDaily({ force = false, day = dayKey() } = {}) {
       res.added += fresh.length;
     }
   }
+
+  // 4. Aktiver Abruf: sicher erkannte häufige Wörter zusätzlich von Deutsch nach Koreanisch (häufigste zuerst)
+  if (!paused) res.active = addActiveCards(cfg);
 
   const d = new Date(day + 'T12:00:00');
   const learn = S.nodes[cfg.learnDeckId];
